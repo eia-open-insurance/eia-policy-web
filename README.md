@@ -24,6 +24,26 @@ links, sends an `Idempotency-Key` on every create, and displays canonical
 send it as `If-Match` together with the compatibility `expectedVersion`; a stale
 version is shown as a problem alert and the list is reloaded.
 
+Opening a policy shows a record detail with tabs:
+
+- **Overview** — policy terms, ETag, and the derived current version with its
+  hash-verified flag.
+- **Versions** — immutable version history, change type, effective window, and
+  premium delta.
+- **Coverages & Limits** — coverage grants with per-occurrence, aggregate,
+  sublimit, deductible, coinsurance, and remaining aggregate; add a coverage and
+  post an idempotent aggregate erosion fact.
+- **Endorsements** — endorsement list and an endorse form (type, effective date,
+  premium delta, coverage impact, backdate reason, approver/approval reference).
+- **Insureds & Locations** — insured roles and scheduled locations with add
+  forms.
+- **Cancellation** — cancellation history with the computed return premium, a
+  cancel form, and a reinstatement form that requires approval and premium
+  evidence.
+
+Every second-slice mutation sends the current policy ETag as `If-Match` and a
+fresh `Idempotency-Key`; the returned ETag updates the header immediately.
+
 ## Local development
 
 ```powershell
@@ -38,7 +58,7 @@ npm run build
 npm test
 ```
 
-`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `@swc/core` is pinned to `1.10.7`.
+`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, and `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem. `@swc/core` is pinned to `1.10.7`.
 
 ## Responsibilities
 

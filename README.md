@@ -13,6 +13,26 @@
 
 Policy federated remote: screens, widgets, record tabs, and transaction composition. Direct policy lifecycle, coverage, limits, billing, underwriting, rating, and capacity.
 
+## Implemented slice
+
+A React 19 workbench that lists policies and creates DRAFT policies through the domain API. It is a Webpack 5 Module Federation container named `eia_policy` that exposes `./App` and uses an asynchronous bootstrap so React is shared with the shell.
+
+## Local development
+
+```powershell
+npm install
+npm start
+```
+
+The dev server listens on port 3002 and proxies `/api` to `http://localhost:8084`. The Policy domain and expert must be running for live data.
+
+```powershell
+npm run build
+npm test
+```
+
+`npm test` runs the Playwright test against the dev server with a mocked API. `@swc/core` is pinned to `1.10.7`.
+
 ## Responsibilities
 
 - Keep this repository focused on one deployable component or one platform concern.

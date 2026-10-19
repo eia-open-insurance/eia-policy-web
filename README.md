@@ -11,7 +11,7 @@
 
 ## Purpose
 
-Policy federated remote: screens, widgets, record tabs, and transaction composition. Direct policy lifecycle, coverage, limits, billing, underwriting, rating, and capacity.
+Policy federated remote: screens, widgets, record tabs, and transaction composition. Primary policy lifecycle, coverage, limits, billing, underwriting, rating, and capacity.
 
 ## Responsibilities
 

@@ -1,7 +1,7 @@
 # eia-policy-web
 
-- GitHub organization: `eia-platform`
-- Repository URL: https://github.com/eia-platform/eia-policy-web
+- GitHub organization: `eia-open-insurance`
+- Repository URL: https://github.com/eia-open-insurance/eia-policy-web
 - Type: Federated front-end
 - Deployable: Yes
 - Owner: Policy
@@ -34,3 +34,6 @@ Policy federated remote: screens, widgets, record tabs, and transaction composit
 
 No business logic; all actions go through the domain service.
 
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

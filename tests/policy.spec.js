@@ -85,7 +85,7 @@ test('renders the page envelope and creates a policy with an Idempotency-Key', a
   await page.getByPlaceholder('Insured party ID (UUID)').fill('bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb');
   await page.getByRole('button', { name: 'Create policy' }).click();
 
-  await expect(page.getByText('POL-2026-0000002')).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'POL-2026-0000002', exact: true })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
   await expect(page.getByRole('status')).toContainText('Created POL-2026-0000002');
   expect(idempotencyKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
@@ -123,7 +123,7 @@ test('follows next and previous links from the page envelope', async ({ page }) 
   await expect(page.getByText('Page 1 · 2 policies')).toBeVisible();
 
   await page.getByRole('button', { name: 'Next' }).click();
-  await expect(page.getByText('POL-2026-0000002')).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'POL-2026-0000002', exact: true })).toBeVisible();
   await expect(page.getByText('Page 2 · 2 policies')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Previous' })).toBeEnabled();
 
@@ -215,3 +215,4 @@ test('advances status with the detail ETag as If-Match', async ({ page }) => {
   expect(patchHeaders['if-match']).toBe('"0"');
   expect(patchBody).toEqual({ status: 'QUOTED', expectedVersion: 0 });
 });
+

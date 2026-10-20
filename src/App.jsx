@@ -1,6 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ActivityTimeline, { activityEndpoint, sortActivityItems } from './ActivityTimeline.jsx';
 import EntityPicker from './EntityPicker.jsx';
+import {
+  BILLING_FREQUENCIES,
+  billingFrequencyLabel,
+  billingPaymentHref,
+  billingPlanPayload,
+  billingStatusTone,
+  canCreatePayment,
+  canManageInstallment,
+  defaultBillingForm,
+  emptyBillingState,
+  isOverdue,
+  normalizeBilling,
+  validateBillingForm
+} from './billing.js';
 import { partyEndpoint, partyRecordLabel } from './party.js';
 
 const TENANT = '11111111-1111-7111-8111-111111111111';
@@ -23,6 +37,7 @@ const TABS = [
   { id: 'coverages', label: 'Coverages & Limits' },
   { id: 'endorsements', label: 'Endorsements' },
   { id: 'parties', label: 'Insureds & Locations' },
+  { id: 'billing', label: 'Billing' },
   { id: 'cancellation', label: 'Cancellation' },
   { id: 'activity', label: 'Activity' }
 ];
@@ -235,6 +250,8 @@ export default function App() {
   const [locations, setLocations] = useState([]);
   const [cancellations, setCancellations] = useState([]);
   const [reinstatements, setReinstatements] = useState([]);
+  const [billing, setBilling] = useState(emptyBillingState);
+  const billingRequestRef = useRef(0);
 
   const [coverageForm, setCoverageForm] = useState(() => defaultCoverageForm(null));
   const [erosionForm, setErosionForm] = useState({
@@ -246,6 +263,9 @@ export default function App() {
   const [locationForm, setLocationForm] = useState(() => defaultLocationForm(null));
   const [cancelForm, setCancelForm] = useState(defaultCancelForm);
   const [reinstateForm, setReinstateForm] = useState(defaultReinstateForm);
+  const [billingForm, setBillingForm] = useState(() => defaultBillingForm(null));
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingInstallmentId, setBillingInstallmentId] = useState(null);
 
   async function load(pageToLoad = 0) {
     setLoading(true);
@@ -438,6 +458,10 @@ export default function App() {
       setLocations([]);
       setCancellations([]);
       setReinstatements([]);
+      clearBilling();
+      setBillingForm(defaultBillingForm(detail.body));
+      setBillingInstallmentId(null);
+      setBillingBusy(false);
       if (!options.keepTab) {
         setCoverageForm(defaultCoverageForm(detail.body));
         setInsuredForm(defaultInsuredForm(detail.body));
@@ -537,6 +561,55 @@ export default function App() {
   }
 
   /**
+   * Billing is the policy's premium collection plan. A 404 means the policy has
+   * no plan yet (the record itself is already on screen), so it is an empty
+   * state rather than an error. The tab keeps its own request lifecycle so a
+   * slow billing read never blocks the policy header or another tab.
+   */
+  async function loadBilling(policyId = selected?.id, policy = selected?.policy) {
+    const requestId = billingRequestRef.current + 1;
+    billingRequestRef.current = requestId;
+    if (!policyId) {
+      setBilling(emptyBillingState());
+      return;
+    }
+    setBilling((current) => ({ ...current, loading: true, error: '' }));
+    try {
+      const result = await api(`/api/v1/policies/${policyId}/billing`);
+      if (billingRequestRef.current !== requestId) return;
+      if (result.response.status === 204 || result.response.status === 404) {
+        setBilling({ ...emptyBillingState(), loading: false });
+        return;
+      }
+      if (!result.response.ok) {
+        setBilling({
+          ...emptyBillingState(),
+          loading: false,
+          error: 'Billing is temporarily unavailable.'
+        });
+        return;
+      }
+      setBilling({
+        ...normalizeBilling(result.body, policy),
+        loading: false,
+        error: ''
+      });
+    } catch {
+      if (billingRequestRef.current !== requestId) return;
+      setBilling({
+        ...emptyBillingState(),
+        loading: false,
+        error: 'Billing is temporarily unavailable.'
+      });
+    }
+  }
+
+  function clearBilling() {
+    billingRequestRef.current += 1;
+    setBilling(emptyBillingState());
+  }
+
+  /**
    * The activity timeline is derived from the platform event stream, not from
    * the policy aggregate. It loads as soon as a record is selected, but remains
    * card-local: an unavailable event service never blocks the policy record.
@@ -611,6 +684,8 @@ export default function App() {
         else setInsureds(pageItems(insuredResult.body));
         if (!locationResult.response.ok) setError(problemMessage(locationResult.body, 'Location load failed'));
         else setLocations(pageItems(locationResult.body));
+      } else if (tabId === 'billing') {
+        await loadBilling(policyId, selected?.id === policyId ? selected.policy : null);
       } else if (tabId === 'cancellation') {
         const [cancellationResult, reinstatementResult] = await Promise.all([
           api(`/api/v1/policies/${policyId}/cancellations?page=0&size=50`),
@@ -672,6 +747,9 @@ export default function App() {
     clearRelated();
     clearDocuments();
     clearActivity();
+    clearBilling();
+    setBillingForm(defaultBillingForm(null));
+    setBillingInstallmentId(null);
   }
 
   async function refreshWorkspace() {
@@ -910,6 +988,81 @@ export default function App() {
     await refreshSelected(result.etag);
   }
 
+  // ---- billing plan -------------------------------------------------
+  function updateBilling(field, value) {
+    setBillingForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function submitBillingPlan(event) {
+    event.preventDefault();
+    if (!selected) return;
+    setError('');
+    setNotice('');
+    const validation = validateBillingForm(billingForm);
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    const payload = billingPlanPayload(billingForm);
+    setBillingBusy(true);
+    try {
+      const result = await api(`/api/v1/policies/${selected.id}/billing`, {
+        method: 'POST',
+        body: payload,
+        idempotencyKey: newIdempotencyKey()
+      });
+      if (!result.response.ok) {
+        setError(problemMessage(result.body, `Billing plan creation failed: ${result.response.status}`));
+        // A conflict usually means a plan already exists; read it back so the
+        // tab shows the current schedule instead of the stale empty state.
+        if (result.response.status === 409) {
+          await loadBilling(selected.id, selected.policy);
+        }
+        return;
+      }
+      const noun = payload.installmentCount === 1 ? 'installment' : 'installments';
+      setNotice(`Billing plan created with ${payload.installmentCount} ${noun}.`);
+      setBillingForm(defaultBillingForm(selected.policy));
+      await loadBilling(selected.id, selected.policy);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBillingBusy(false);
+    }
+  }
+
+  async function updateInstallment(installment, status) {
+    if (!selected || !installment?.id) return;
+    setError('');
+    setNotice('');
+    setBillingInstallmentId(installment.id);
+    const body = { status };
+    if (status === 'PAID' && installment.paymentId) body.paymentId = installment.paymentId;
+    try {
+      const result = await api(
+        `/api/v1/policies/${selected.id}/billing/installments/${installment.id}`,
+        { method: 'PATCH', body }
+      );
+      if (!result.response.ok) {
+        setError(problemMessage(result.body, `Installment update failed: ${result.response.status}`));
+        if ([404, 409, 410, 412].includes(result.response.status)) {
+          await loadBilling(selected.id, selected.policy);
+        }
+        return;
+      }
+      setNotice(
+        status === 'PAID'
+          ? `Installment ${installment.installmentNumber} marked paid.`
+          : `Installment ${installment.installmentNumber} waived.`
+      );
+      await loadBilling(selected.id, selected.policy);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBillingInstallmentId(null);
+    }
+  }
+
   const selectedPolicy = selected?.policy;
   const advanceTarget = selectedPolicy ? nextStatusFor(selectedPolicy.status) : null;
   const insuredPartyText = selectedPolicy?.insuredPartyId
@@ -930,7 +1083,8 @@ export default function App() {
           <h1>Policy</h1>
           <p className="subtitle">
             Direct policies, versions, coverages and limits, endorsements, insureds and locations,
-            cancellation and reinstatement. New policies start in DRAFT and advance through the issued lifecycle.
+            billing, cancellation and reinstatement. New policies start in DRAFT and advance through
+            the issued lifecycle.
           </p>
         </div>
         <div className="eia-actions">
@@ -1276,7 +1430,7 @@ export default function App() {
                 ))}
               </nav>
 
-              {tabLoading && <p className="eia-muted">Loading…</p>}
+              {tabLoading && tab !== 'billing' && <p className="eia-muted">Loading…</p>}
 
               {tab === 'overview' && (
                 <section
@@ -2183,6 +2337,320 @@ export default function App() {
                 </section>
               )}
 
+              {tab === 'billing' && (
+                <section
+                  id="panel-billing"
+                  role="tabpanel"
+                  aria-labelledby="tab-billing"
+                >
+                  <div className="eia-section-title">
+                    <h2>Billing</h2>
+                    <span className="eia-muted">
+                      Premium collection · Payment owns disbursement and approval
+                    </span>
+                  </div>
+
+                  {billing.loading && !billing.plan ? (
+                    <p className="eia-muted">Loading billing plan…</p>
+                  ) : billing.error ? (
+                    <section className="eia-card" aria-label="Billing unavailable">
+                      <p role="alert" style={{ marginTop: 0 }}>{billing.error}</p>
+                      <button
+                        type="button"
+                        className="eia-btn-secondary"
+                        onClick={() => loadBilling()}
+                      >
+                        Retry
+                      </button>
+                    </section>
+                  ) : !billing.plan ? (
+                    <>
+                      <section
+                        className="eia-card"
+                        aria-label="No billing plan"
+                        data-testid="billing-empty"
+                      >
+                        <h3>No billing plan yet</h3>
+                        <p className="eia-billing-copy">
+                          This policy&apos;s premium is not scheduled for collection. Billing is
+                          premium collection: create an installment plan to collect the selected
+                          policy premium over time. No money moves from Policy; Payment owns
+                          disbursement and approval.
+                        </p>
+                        <dl className="eia-kv" style={{ marginTop: 10 }}>
+                          <dt>Policy premium</dt>
+                          <dd>
+                            {formatMoney(
+                              selectedPolicy.premiumAmount,
+                              selectedPolicy.premiumCurrency
+                            )}
+                          </dd>
+                          <dt>Premium currency</dt>
+                          <dd>{selectedPolicy.premiumCurrency || '—'}</dd>
+                          <dt>Collection status</dt>
+                          <dd>Not scheduled</dd>
+                        </dl>
+                      </section>
+
+                      <section
+                        className="eia-card"
+                        aria-label="Create billing plan"
+                        style={{ marginTop: 16 }}
+                      >
+                        <div className="eia-section-title" style={{ marginTop: 0 }}>
+                          <h2>Create billing plan</h2>
+                          <span className="eia-muted">
+                            Installments 1–24 · premium is derived from the policy
+                          </span>
+                        </div>
+                        <p className="eia-billing-copy">
+                          Splits the selected policy&apos;s premium into a collection schedule.
+                          Creating a plan does not change coverage, limits, or the policy version.
+                        </p>
+                        <form className="eia-form-grid" onSubmit={submitBillingPlan}>
+                          <div className="eia-field">
+                            <label htmlFor="billing-installment-count">Installment count</label>
+                            <input
+                              id="billing-installment-count"
+                              type="number"
+                              min="1"
+                              max="24"
+                              step="1"
+                              value={billingForm.installmentCount}
+                              onChange={(e) => updateBilling('installmentCount', e.target.value)}
+                              required
+                            />
+                          </div>
+                          <div className="eia-field">
+                            <label htmlFor="billing-frequency">Frequency</label>
+                            <select
+                              id="billing-frequency"
+                              value={billingForm.frequency}
+                              onChange={(e) => updateBilling('frequency', e.target.value)}
+                            >
+                              {BILLING_FREQUENCIES.map((entry) => (
+                                <option key={entry.value} value={entry.value}>
+                                  {entry.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="eia-field">
+                            <label htmlFor="billing-first-due-date">First due date</label>
+                            <input
+                              id="billing-first-due-date"
+                              type="date"
+                              value={billingForm.firstDueDate}
+                              onChange={(e) => updateBilling('firstDueDate', e.target.value)}
+                              required
+                            />
+                          </div>
+                          <div className="eia-field">
+                            <button type="submit" disabled={billingBusy}>
+                              {billingBusy ? 'Creating plan…' : 'Create billing plan'}
+                            </button>
+                          </div>
+                        </form>
+                      </section>
+
+                      <BillingContextPanel />
+                    </>
+                  ) : (
+                    <>
+                      <div className="eia-section-title" style={{ marginTop: 0 }}>
+                        <h2>Billing plan</h2>
+                        <span className="eia-muted" data-testid="billing-plan-meta">
+                          {billing.plan.planNumber ? `${billing.plan.planNumber} · ` : ''}
+                          {billing.plan.installmentCount ?? billing.installments.length} installment
+                          {(billing.plan.installmentCount ?? billing.installments.length) === 1
+                            ? ''
+                            : 's'}
+                          {' · '}
+                          {billingFrequencyLabel(billing.plan.frequency)}
+                          {billing.plan.firstDueDate
+                            ? ` · first due ${billing.plan.firstDueDate}`
+                            : ''}
+                        </span>
+                      </div>
+
+                      <p className="eia-billing-policy-context" data-testid="billing-policy-context">
+                        Policy premium{' '}
+                        <b>{formatMoney(selectedPolicy.premiumAmount, selectedPolicy.premiumCurrency)}</b>
+                        {' · '}Billing currency <b>{billing.summary?.currency || '—'}</b>
+                        {billing.plan.status ? (
+                          <>
+                            {' · '}Plan status{' '}
+                            <span
+                              className={`eia-pill ${billing.plan.status === 'ACTIVE' ? 'green' : 'blue'}`}
+                            >
+                              {billing.plan.status}
+                            </span>
+                          </>
+                        ) : null}
+                      </p>
+
+                      <div className="eia-summary-grid" aria-label="Billing summary">
+                        <div className="eia-card">
+                          <h3>Total premium</h3>
+                          <div className="value" data-testid="billing-summary-total">
+                            {formatMoney(
+                              billing.summary?.totalPremiumAmount,
+                              billing.summary?.currency
+                            )}
+                          </div>
+                          <div className="eia-metric-label">scheduled premium</div>
+                        </div>
+                        <div className="eia-card">
+                          <h3>Paid</h3>
+                          <div className="value" data-testid="billing-summary-paid">
+                            {formatMoney(billing.summary?.paidAmount, billing.summary?.currency)}
+                          </div>
+                          <div className="eia-metric-label">collected premium</div>
+                        </div>
+                        <div className="eia-card">
+                          <h3>Outstanding</h3>
+                          <div className="value" data-testid="billing-summary-outstanding">
+                            {formatMoney(
+                              billing.summary?.outstandingAmount,
+                              billing.summary?.currency
+                            )}
+                          </div>
+                          <div className="eia-metric-label">still to collect</div>
+                        </div>
+                        <div className="eia-card eia-billing-overdue-card">
+                          <h3>Overdue</h3>
+                          <div className="value" data-testid="billing-summary-overdue">
+                            {formatMoney(
+                              billing.summary?.overdueAmount,
+                              billing.summary?.currency
+                            )}
+                          </div>
+                          <div className="eia-metric-label">
+                            {billing.summary?.overdueCount || 0} past due installment
+                            {(billing.summary?.overdueCount || 0) === 1 ? '' : 's'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="eia-section-title">
+                        <h2>Installments</h2>
+                        <span className="eia-muted">
+                          {billing.installments.length} installment
+                          {billing.installments.length === 1 ? '' : 's'}
+                        </span>
+                      </div>
+                      <div className="eia-table-wrap">
+                        <table className="eia-table eia-billing-table" aria-label="Billing installments">
+                          <thead>
+                            <tr>
+                              <th>Number</th>
+                              <th>Due date</th>
+                              <th>Amount</th>
+                              <th>Status</th>
+                              <th>Paid date / payment ID</th>
+                              <th>Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {billing.installments.map((installment) => {
+                              const overdue = isOverdue(installment.status);
+                              return (
+                                <tr
+                                  key={installment.id}
+                                  className={overdue ? 'eia-billing-overdue-row' : undefined}
+                                  data-overdue={overdue ? 'true' : undefined}
+                                  data-testid={`installment-row-${installment.id}`}
+                                >
+                                  <td>{installment.installmentNumber}</td>
+                                  <td>{installment.dueDate || '—'}</td>
+                                  <td>
+                                    {formatMoney(
+                                      installment.amount,
+                                      installment.currency || billing.summary?.currency
+                                    )}
+                                  </td>
+                                  <td>
+                                    <span
+                                      className={`eia-pill ${billingStatusTone(installment.status)}`}
+                                    >
+                                      {installment.status}
+                                    </span>
+                                    {overdue && (
+                                      <span className="eia-billing-overdue-flag">Past due</span>
+                                    )}
+                                  </td>
+                                  <td>
+                                    {installment.paidDate || installment.paymentId ? (
+                                      <>
+                                        {installment.paidDate || '—'}
+                                        {installment.paymentId ? (
+                                          <>
+                                            {' · '}
+                                            <code
+                                              className="eia-mono"
+                                              data-testid={`payment-id-${installment.id}`}
+                                            >
+                                              {installment.paymentId}
+                                            </code>
+                                          </>
+                                        ) : null}
+                                      </>
+                                    ) : '—'}
+                                  </td>
+                                  <td>
+                                    {canManageInstallment(installment.status) ? (
+                                      <span className="eia-billing-actions">
+                                        <button
+                                          type="button"
+                                          className="eia-btn-secondary"
+                                          data-testid={`mark-paid-${installment.id}`}
+                                          disabled={billingInstallmentId === installment.id}
+                                          onClick={() => updateInstallment(installment, 'PAID')}
+                                        >
+                                          Mark paid
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="eia-btn-secondary"
+                                          data-testid={`waive-${installment.id}`}
+                                          disabled={billingInstallmentId === installment.id}
+                                          onClick={() => updateInstallment(installment, 'WAIVED')}
+                                        >
+                                          Waive
+                                        </button>
+                                        {canCreatePayment(installment.status) && (
+                                          <CrossLink
+                                            className="eia-btn-secondary eia-billing-payment-link"
+                                            href={billingPaymentHref(selectedPolicy, installment)}
+                                            data-testid={`create-payment-${installment.id}`}
+                                            title={`Create a Payment for installment ${installment.installmentNumber}`}
+                                          >
+                                            Create payment
+                                          </CrossLink>
+                                        )}
+                                      </span>
+                                    ) : '—'}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            {billing.installments.length === 0 && (
+                              <tr>
+                                <td className="eia-muted" colSpan={6}>
+                                  No installments on this plan.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <BillingContextPanel />
+                    </>
+                  )}
+                </section>
+              )}
+
               {tab === 'cancellation' && (
                 <section
                   id="panel-cancellation"
@@ -2497,4 +2965,32 @@ function defaultReinstateForm() {
     premiumEvidenceAmount: '1500.00',
     premiumEvidenceCurrency: 'USD'
   };
+}
+
+/**
+ * Billing and Payment are deliberately separate responsibilities. The plan
+ * schedules collection of the policy premium; it never moves money, approves a
+ * payment, or edits coverage.
+ */
+function BillingContextPanel() {
+  return (
+    <section className="eia-context-panel" aria-label="Billing and Payment boundary">
+      <h4>Billing boundary</h4>
+      <p>
+        <b>Billing is premium collection.</b> The plan records what the insured owes and when each
+        installment is due against the selected policy premium.
+      </p>
+      <p>
+        <b>Payment owns disbursement and approval.</b> Policy only hands an installment to Payment
+        through the Create payment link; it never creates or approves a payment.
+      </p>
+      <p>
+        <b>A billing plan does not change policy coverage.</b> Coverage, limits, premium, and the
+        policy version stay with the policy record.
+      </p>
+      <div className="links">
+        <CrossLink href="/payment">Open Payment workbench</CrossLink>
+      </div>
+    </section>
+  );
 }

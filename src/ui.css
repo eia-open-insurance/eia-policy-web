@@ -932,3 +932,52 @@ main [role="status"] {
 }
 
 .eia-activity-fact b { font-weight: 600; overflow-wrap: anywhere; }
+
+/* Policy billing: premium collection plan and Payment hand-off */
+.eia-billing-copy {
+  margin: 8px 0 0;
+  color: var(--eia-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.eia-billing-policy-context {
+  margin: 0 0 4px;
+  color: var(--eia-muted);
+  font-size: 12px;
+}
+.eia-billing-overdue-card { border-top: 3px solid var(--eia-red); }
+main tr.eia-billing-overdue-row td { background: #fff7f7 !important; }
+main tr.eia-billing-overdue-row:hover td { background: #ffefef !important; }
+main tr.eia-billing-overdue-row td:first-child {
+  box-shadow: inset 3px 0 0 var(--eia-red);
+}
+.eia-billing-overdue-flag {
+  display: block;
+  margin: 3px 0 0;
+  color: var(--eia-red);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.eia-billing-table td:nth-child(1),
+.eia-billing-table td:nth-child(2),
+.eia-billing-table th:nth-child(1),
+.eia-billing-table th:nth-child(2) { white-space: nowrap; }
+.eia-billing-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+a.eia-btn-secondary.eia-billing-payment-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 13px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.eia-context-panel p + p { margin-top: 6px; }

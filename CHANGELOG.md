@@ -26,6 +26,23 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
 - Insured-party cross-link resolution through `GET /api/v1/parties/{id}`: the
   record header and Overview show `name · party number` link text with a
   short-UUID fallback, and a 404 never blocks the policy record.
+- Billing tab with a no-plan premium-collection empty state and a plan form
+  (installment count 1–24, frequency, first due date) that creates the plan
+  through `POST /api/v1/policies/{policyId}/billing`.
+- Billing plan summary (total premium, paid, outstanding, overdue) and an
+  installment table with number, due date, amount, status, paid date/payment
+  id, and actions; `DUE`/`OVERDUE` rows are collectible and `OVERDUE` rows are
+  marked.
+- Mark paid and waive actions through
+  `PATCH /api/v1/policies/{policyId}/billing/installments/{installmentId}`
+  with `{status, paymentId?}`.
+- Payment hand-off for `DUE`/`OVERDUE` installments:
+  `/payment?new=1&sourceType=POLICY&sourceId=…&sourceReference=<policyNumber> installment <n>&amount=…&currency=…&payeePartyId=…`.
+  Policy never creates a payment.
+- Billing context panel stating that billing is premium collection, Payment owns
+  disbursement and approval, and a plan does not change policy coverage.
+- Playwright coverage for plan creation payload, summary, mark paid/waive
+  payloads, overdue state, Payment URL, read failure, and 409 conflicts.
 
 ### Changed
 

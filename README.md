@@ -37,6 +37,16 @@ Opening a policy shows a record detail with tabs:
   premium delta, coverage impact, backdate reason, approver/approval reference).
 - **Insureds & Locations** — insured roles and scheduled locations with add
   forms.
+- **Billing** — the policy's premium collection plan. With no plan, the tab
+  explains premium collection and offers a plan form (installment count 1–24,
+  frequency, first due date) that posts `POST /api/v1/policies/{policyId}/billing`.
+  With a plan, it shows the total premium, paid, outstanding, and overdue
+  summary plus an installment table (number, due date, amount, status, paid
+  date/payment id, action). `DUE` and `OVERDUE` installments can be marked paid
+  or waived through `PATCH .../billing/installments/{installmentId}`. The
+  Payment hand-off for those installments builds
+  `/payment?new=1&sourceType=POLICY&sourceId=…&sourceReference=<policyNumber> installment <n>&amount=…&currency=…&payeePartyId=…`
+  and never creates a payment from Policy.
 - **Cancellation** — cancellation history with the computed return premium, a
   cancel form, and a reinstatement form that requires approval and premium
   evidence.
@@ -63,7 +73,7 @@ npm run build
 npm test
 ```
 
-`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, and `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts. `@swc/core` is pinned to `1.10.7`.
+`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, and `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, the Payment hand-off URL, and 409 conflicts. `@swc/core` is pinned to `1.10.7`.
 
 ## Responsibilities
 

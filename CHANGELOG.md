@@ -59,6 +59,23 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   the prior policy remains intact.
 - Playwright coverage for renewal eligibility, modal defaults, POST payload and
   headers, success selection/notice, predecessor link, and 409 conflict.
+- Mass tort tab after Coverage & Limits with a not-set empty state that explains
+  mass-tort administration and a `Set up profile` action.
+- Mass tort profile form for tort type, trigger, allocation method with a short
+  explanation, allocation notes, and coverage block start/end. Saving a draft
+  requires the tort, trigger, and allocation method; completing additionally
+  requires the notes and coverage block.
+- `GET`/`PUT /api/v1/policies/{policyId}/mass-tort-profile` integration with
+  `Save draft` and `Mark complete` status transitions, a current status/value
+  summary, and a complete-profile summary card.
+- Contained mass tort loading, 400, 404, and unavailable states, with a profile
+  reload after a 409 conflict.
+- Mass tort context panel stating that the profile guides allocation and
+  coverage administration, never changes coverage or limits, and that Policy
+  owns the profile while Direct Claims owns allocations.
+- Playwright coverage for the mass tort empty state, draft payload, complete
+  validation, existing-value load/edit, context boundary, read failure, 400
+  problem, and 409 reload.
 
 ### Changed
 

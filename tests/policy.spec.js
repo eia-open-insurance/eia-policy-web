@@ -130,11 +130,12 @@ test('renders the operational record layout and creates a policy with an Idempot
   await expect(summaryValues.nth(2)).toHaveText('2026-01-01');
   await expect(summaryValues.nth(3)).toHaveText('2027-01-01');
 
-  await expect(page.getByRole('tab')).toHaveCount(8);
+  await expect(page.getByRole('tab')).toHaveCount(9);
   await expect(page.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('tab', { name: 'Activity' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Billing' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Coverages & Limits' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Mass tort' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Insureds & Locations' })).toBeVisible();
 
   await page.getByRole('button', { name: 'New policy' }).click();

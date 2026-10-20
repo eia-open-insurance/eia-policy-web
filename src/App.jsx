@@ -15,6 +15,25 @@ import {
   normalizeBilling,
   validateBillingForm
 } from './billing.js';
+import {
+  ALLOCATION_METHODS,
+  MASS_TORT_STATUS,
+  MAX_ALLOCATION_NOTES_LENGTH,
+  TORT_TYPES,
+  TRIGGER_THEORIES,
+  allocationMethodDescription,
+  allocationMethodLabel,
+  coverageBlockLabel,
+  defaultMassTortForm,
+  emptyMassTortState,
+  isMassTortComplete,
+  massTortPayload,
+  massTortStatusTone,
+  normalizeMassTortProfile,
+  tortTypeLabel,
+  triggerLabel,
+  validateMassTortForm
+} from './massTort.js';
 import { partyEndpoint, partyRecordLabel } from './party.js';
 import {
   addYears,
@@ -43,6 +62,7 @@ const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'versions', label: 'Versions' },
   { id: 'coverages', label: 'Coverages & Limits' },
+  { id: 'massTort', label: 'Mass tort' },
   { id: 'endorsements', label: 'Endorsements' },
   { id: 'parties', label: 'Insureds & Locations' },
   { id: 'billing', label: 'Billing' },
@@ -261,6 +281,14 @@ export default function App() {
   const [billing, setBilling] = useState(emptyBillingState);
   const billingRequestRef = useRef(0);
 
+  const [massTort, setMassTort] = useState(emptyMassTortState);
+  const massTortRequestRef = useRef(0);
+  const [massTortForm, setMassTortForm] = useState(() => defaultMassTortForm(null, null));
+  const [massTortSetup, setMassTortSetup] = useState(false);
+  const [massTortSaving, setMassTortSaving] = useState('');
+  const [massTortFormError, setMassTortFormError] = useState('');
+  const [massTortNotice, setMassTortNotice] = useState('');
+
   const [coverageForm, setCoverageForm] = useState(() => defaultCoverageForm(null));
   const [erosionForm, setErosionForm] = useState({
     claimId: '', allocationId: '', sourceVersion: '1',
@@ -477,6 +505,8 @@ export default function App() {
       setBillingForm(defaultBillingForm(detail.body));
       setBillingInstallmentId(null);
       setBillingBusy(false);
+      clearMassTort();
+      setMassTortForm(defaultMassTortForm(null, detail.body));
       if (!options.keepTab) {
         setCoverageForm(defaultCoverageForm(detail.body));
         setInsuredForm(defaultInsuredForm(detail.body));
@@ -625,6 +655,69 @@ export default function App() {
   }
 
   /**
+   * The mass tort profile is administrative context owned by the policy. A 404
+   * means the policy has no profile yet, so it is the tab's empty state rather
+   * than an unavailable tab. A slow read never blocks the record header or
+   * another tab: the profile keeps its own request lifecycle.
+   */
+  async function loadMassTort(policyId = selected?.id, policy = selected?.policy) {
+    const requestId = massTortRequestRef.current + 1;
+    massTortRequestRef.current = requestId;
+    if (!policyId) {
+      setMassTort(emptyMassTortState());
+      return;
+    }
+    setMassTort((current) => ({ ...current, loading: true, error: '' }));
+    try {
+      const result = await api(`/api/v1/policies/${policyId}/mass-tort-profile`);
+      if (massTortRequestRef.current !== requestId) return;
+      if (result.response.status === 204 || result.response.status === 404) {
+        setMassTort({ ...emptyMassTortState(), loading: false });
+        setMassTortForm(defaultMassTortForm(null, policy));
+        setMassTortSetup(false);
+        setMassTortFormError('');
+        setMassTortNotice('');
+        return;
+      }
+      if (!result.response.ok) {
+        setMassTort((current) => ({
+          ...current,
+          loading: false,
+          error: 'Mass tort profile is temporarily unavailable.'
+        }));
+        return;
+      }
+      const profile = normalizeMassTortProfile(result.body);
+      if (!profile) {
+        setMassTort({ ...emptyMassTortState(), loading: false });
+        setMassTortForm(defaultMassTortForm(null, policy));
+        setMassTortSetup(false);
+        return;
+      }
+      setMassTort({ profile, loading: false, error: '' });
+      setMassTortForm(defaultMassTortForm(profile, policy));
+      setMassTortSetup(true);
+    } catch {
+      if (massTortRequestRef.current !== requestId) return;
+      setMassTort((current) => ({
+        ...current,
+        loading: false,
+        error: 'Mass tort profile is temporarily unavailable.'
+      }));
+    }
+  }
+
+  function clearMassTort() {
+    massTortRequestRef.current += 1;
+    setMassTort(emptyMassTortState());
+    setMassTortForm(defaultMassTortForm(null, null));
+    setMassTortSetup(false);
+    setMassTortSaving('');
+    setMassTortFormError('');
+    setMassTortNotice('');
+  }
+
+  /**
    * The activity timeline is derived from the platform event stream, not from
    * the policy aggregate. It loads as soon as a record is selected, but remains
    * card-local: an unavailable event service never blocks the policy record.
@@ -686,6 +779,8 @@ export default function App() {
         const result = await api(`/api/v1/policies/${policyId}/coverages?page=0&size=50`);
         if (!result.response.ok) setError(problemMessage(result.body, 'Coverage load failed'));
         else setCoverages(pageItems(result.body));
+      } else if (tabId === 'massTort') {
+        await loadMassTort(policyId, selected?.id === policyId ? selected.policy : null);
       } else if (tabId === 'endorsements') {
         const result = await api(`/api/v1/policies/${policyId}/endorsements?page=0&size=50`);
         if (!result.response.ok) setError(problemMessage(result.body, 'Endorsement load failed'));
@@ -768,6 +863,7 @@ export default function App() {
     clearBilling();
     setBillingForm(defaultBillingForm(null));
     setBillingInstallmentId(null);
+    clearMassTort();
   }
 
   async function refreshWorkspace() {
@@ -1159,6 +1255,87 @@ export default function App() {
     }
   }
 
+  // ---- mass tort profile --------------------------------------------
+  function updateMassTort(field, value) {
+    setMassTortForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function openMassTortSetup() {
+    setMassTortFormError('');
+    setMassTortNotice('');
+    if (!massTort.profile) {
+      setMassTortForm(defaultMassTortForm(null, selectedPolicy));
+    }
+    setMassTortSetup(true);
+  }
+
+  /**
+   * PUT replaces the profile and moves its status between DRAFT and COMPLETE.
+   * Validation stays in the tab; the canonical problem body wins when the
+   * domain rejects the request. A 409 means another operator changed the
+   * profile, so the current value is reloaded before the operator retries.
+   */
+  async function submitMassTort(status) {
+    if (!selected || massTortSaving) return;
+    setMassTortFormError('');
+    setMassTortNotice('');
+    const validation = validateMassTortForm(massTortForm, status);
+    if (validation) {
+      setMassTortFormError(validation);
+      return;
+    }
+    const payload = massTortPayload(massTortForm, status);
+    setMassTortSaving(status);
+    try {
+      const result = await api(`/api/v1/policies/${selected.id}/mass-tort-profile`, {
+        method: 'PUT',
+        body: payload
+      });
+      if (!result.response.ok) {
+        setMassTortFormError(
+          problemMessage(result.body, `Profile save failed: ${result.response.status}`)
+        );
+        if (result.response.status === 409) {
+          setMassTortFormError((current) => (
+            `${current} The current profile was reloaded; review the values and try again.`
+          ));
+          await loadMassTort(selected.id, selected.policy);
+        }
+        return;
+      }
+      const saved = normalizeMassTortProfile(result.body) || {
+        id: '',
+        tortType: payload.tortType || '',
+        trigger: payload.triggerType || '',
+        allocationMethod: payload.allocationMethod || '',
+        allocationNotes: payload.allocationNotes || '',
+        coverageBlockStart: payload.coverageBlockStart || '',
+        coverageBlockEnd: payload.coverageBlockEnd || '',
+        status: payload.status,
+        updatedAt: ''
+      };
+      setMassTort({ profile: saved, loading: false, error: '' });
+      setMassTortForm(defaultMassTortForm(saved, selected.policy));
+      setMassTortSetup(true);
+      setMassTortNotice(
+        status === MASS_TORT_STATUS.COMPLETE
+          ? 'Mass tort profile marked complete.'
+          : 'Mass tort profile saved as draft.'
+      );
+      // The expert bumps the policy aggregate version when the profile changes,
+      // so the header version/ETag is refreshed without touching coverage.
+      try {
+        await refreshSelected();
+      } catch {
+        // The profile is saved; a failed header refresh is not a save failure.
+      }
+    } catch (e) {
+      setMassTortFormError(e.message);
+    } finally {
+      setMassTortSaving('');
+    }
+  }
+
   const selectedPolicy = selected?.policy;
   const advanceTarget = selectedPolicy ? nextStatusFor(selectedPolicy.status) : null;
   const renewalAllowed = selectedPolicy ? isRenewable(selectedPolicy.status) : false;
@@ -1172,6 +1349,8 @@ export default function App() {
   const insuredPartyText = selectedPolicy?.insuredPartyId
     ? partyLabels[selectedPolicy.insuredPartyId] || shortId(selectedPolicy.insuredPartyId)
     : '—';
+  const massTortProfile = massTort.profile;
+  const massTortComplete = isMassTortComplete(massTortProfile);
 
   /**
    * A renewal record knows its predecessor by id only. Resolve the policy
@@ -1220,9 +1399,9 @@ export default function App() {
           <div className="eyebrow">Policy · Direct book</div>
           <h1>Policy</h1>
           <p className="subtitle">
-            Direct policies, versions, coverages and limits, endorsements, insureds and locations,
-            billing, cancellation and reinstatement. New policies start in DRAFT and advance through
-            the issued lifecycle.
+            Direct policies, versions, coverages and limits, mass tort profiles, endorsements,
+            insureds and locations, billing, cancellation and reinstatement. New policies start in
+            DRAFT and advance through the issued lifecycle.
           </p>
         </div>
         <div className="eia-actions">
@@ -1597,7 +1776,9 @@ export default function App() {
                 ))}
               </nav>
 
-              {tabLoading && tab !== 'billing' && <p className="eia-muted">Loading…</p>}
+              {tabLoading && tab !== 'billing' && tab !== 'massTort' && (
+                <p className="eia-muted">Loading…</p>
+              )}
 
               {tab === 'overview' && (
                 <section
@@ -2114,6 +2295,293 @@ export default function App() {
                       </div>
                     </form>
                   </section>
+                </section>
+              )}
+
+              {tab === 'massTort' && (
+                <section
+                  id="panel-massTort"
+                  role="tabpanel"
+                  aria-labelledby="tab-massTort"
+                >
+                  <div className="eia-section-title">
+                    <h2>Mass tort profile</h2>
+                    <span className="eia-muted">
+                      Policy-owned administrative context · Direct Claims owns allocations
+                    </span>
+                  </div>
+
+                  {massTort.loading && !massTort.profile ? (
+                    <p className="eia-muted" role="status" data-testid="mass-tort-loading">
+                      Loading mass tort profile…
+                    </p>
+                  ) : massTort.error && !massTort.profile ? (
+                    <section
+                      className="eia-card"
+                      aria-label="Mass tort profile unavailable"
+                      data-testid="mass-tort-error"
+                    >
+                      <p role="alert" style={{ marginTop: 0 }}>{massTort.error}</p>
+                      <button
+                        type="button"
+                        className="eia-btn-secondary"
+                        onClick={() => loadMassTort()}
+                      >
+                        Retry
+                      </button>
+                    </section>
+                  ) : !massTort.profile ? (
+                    !massTortSetup && (
+                      <section
+                        className="eia-card eia-empty"
+                        aria-label="Mass tort profile not set"
+                        data-testid="mass-tort-empty"
+                      >
+                        <h3 style={{ marginTop: 0 }}>Mass tort profile not set</h3>
+                        <p className="eia-billing-copy">
+                          A mass tort profile records the tort, coverage trigger, allocation method,
+                          and coverage block that guide long-tail claim administration. It supplies
+                          the policy context Direct Claims uses to allocate claims across policy
+                          years and layers. It does not change coverage, limits, premium, or the
+                          policy version.
+                        </p>
+                        <button
+                          type="button"
+                          data-testid="mass-tort-setup"
+                          onClick={openMassTortSetup}
+                        >
+                          Set up profile
+                        </button>
+                      </section>
+                    )
+                  ) : (
+                    <section
+                      className={`eia-card${massTortComplete ? ' eia-mass-tort-complete' : ''}`}
+                      aria-label={massTortComplete
+                        ? 'Complete mass tort profile'
+                        : 'Mass tort profile summary'}
+                      data-testid="mass-tort-summary"
+                    >
+                      <div className="eia-section-title" style={{ marginTop: 0 }}>
+                        <h2>{massTortComplete ? 'Complete mass tort profile' : 'Mass tort profile'}</h2>
+                        <span
+                          className={`eia-pill ${massTortStatusTone(massTortProfile.status)}`}
+                          data-testid="mass-tort-status"
+                        >
+                          {massTortProfile.status}
+                        </span>
+                      </div>
+                      {massTortComplete && (
+                        <p className="eia-billing-copy" data-testid="mass-tort-complete-note">
+                          This profile is complete and available to guide allocation and coverage
+                          administration. Completing it did not change coverage, limits, or the
+                          policy version.
+                        </p>
+                      )}
+                      <dl className="eia-kv" style={{ marginTop: 10 }}>
+                        <dt>Tort type</dt>
+                        <dd data-testid="mass-tort-value-tort">
+                          {tortTypeLabel(massTortProfile.tortType)}
+                        </dd>
+                        <dt>Trigger</dt>
+                        <dd data-testid="mass-tort-value-trigger">
+                          {triggerLabel(massTortProfile.trigger)}
+                        </dd>
+                        <dt>Allocation method</dt>
+                        <dd data-testid="mass-tort-value-allocation">
+                          {allocationMethodLabel(massTortProfile.allocationMethod)}
+                        </dd>
+                        <dt>Coverage block</dt>
+                        <dd data-testid="mass-tort-value-block">
+                          {coverageBlockLabel(massTortProfile)}
+                        </dd>
+                        <dt>Allocation notes</dt>
+                        <dd
+                          data-testid="mass-tort-value-notes"
+                          style={{ whiteSpace: 'pre-wrap' }}
+                        >
+                          {massTortProfile.allocationNotes || '—'}
+                        </dd>
+                      </dl>
+                    </section>
+                  )}
+
+                  {massTort.loading && massTort.profile && (
+                    <p className="eia-muted" role="status">Refreshing mass tort profile…</p>
+                  )}
+
+                  {massTort.error && massTort.profile && (
+                    <section
+                      className="eia-card"
+                      aria-label="Mass tort profile refresh failed"
+                      style={{ marginTop: 12 }}
+                    >
+                      <p role="alert" style={{ marginTop: 0 }}>{massTort.error}</p>
+                      <button
+                        type="button"
+                        className="eia-btn-secondary"
+                        onClick={() => loadMassTort()}
+                      >
+                        Retry
+                      </button>
+                    </section>
+                  )}
+
+                  {(massTort.profile || massTortSetup) && (
+                    <section
+                      className="eia-card"
+                      aria-label="Mass tort profile form"
+                      data-testid="mass-tort-form"
+                      style={{ marginTop: 16 }}
+                    >
+                      <div className="eia-section-title" style={{ marginTop: 0 }}>
+                        <h2>
+                          {massTortComplete
+                            ? 'Edit mass tort profile'
+                            : massTort.profile
+                              ? 'Update mass tort profile'
+                              : 'Set up mass tort profile'}
+                        </h2>
+                        <span className="eia-muted">Saved independently of coverage and limits</span>
+                      </div>
+                      <p className="eia-billing-copy">
+                        The profile guides how Direct Claims allocates long-tail claims. It does not
+                        change the policy&apos;s coverage or limits. A draft may omit the allocation
+                        notes and coverage block; mark the profile complete once the tort, trigger,
+                        allocation method, notes, and coverage block are final.
+                      </p>
+                      <form
+                        className="eia-form-grid"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          submitMassTort(MASS_TORT_STATUS.DRAFT);
+                        }}
+                      >
+                        <div className="eia-field">
+                          <label htmlFor="mass-tort-type">Tort type</label>
+                          <select
+                            id="mass-tort-type"
+                            value={massTortForm.tortType}
+                            onChange={(e) => updateMassTort('tortType', e.target.value)}
+                          >
+                            <option value="">Select a tort type</option>
+                            {TORT_TYPES.map((entry) => (
+                              <option key={entry.value} value={entry.value}>
+                                {entry.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="eia-field">
+                          <label htmlFor="mass-tort-trigger">Trigger</label>
+                          <select
+                            id="mass-tort-trigger"
+                            value={massTortForm.trigger}
+                            onChange={(e) => updateMassTort('trigger', e.target.value)}
+                          >
+                            <option value="">Select a trigger</option>
+                            {TRIGGER_THEORIES.map((entry) => (
+                              <option key={entry.value} value={entry.value}>
+                                {entry.label}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="eia-field-hint">
+                            The theory that determines which policy years respond.
+                          </span>
+                        </div>
+                        <div className="eia-field">
+                          <label htmlFor="mass-tort-allocation-method">Allocation method</label>
+                          <select
+                            id="mass-tort-allocation-method"
+                            value={massTortForm.allocationMethod}
+                            onChange={(e) => updateMassTort('allocationMethod', e.target.value)}
+                          >
+                            <option value="">Select an allocation method</option>
+                            {ALLOCATION_METHODS.map((entry) => (
+                              <option key={entry.value} value={entry.value}>
+                                {entry.label}
+                              </option>
+                            ))}
+                          </select>
+                          <span
+                            className="eia-field-hint"
+                            data-testid="mass-tort-allocation-help"
+                          >
+                            {allocationMethodDescription(massTortForm.allocationMethod)
+                              || 'Choose the method Direct Claims should apply to the allocation.'}
+                          </span>
+                        </div>
+                        <div className="eia-field span-3">
+                          <label htmlFor="mass-tort-allocation-notes">Allocation notes</label>
+                          <textarea
+                            id="mass-tort-allocation-notes"
+                            rows={3}
+                            maxLength={MAX_ALLOCATION_NOTES_LENGTH}
+                            placeholder="Agreed basis, matrix, or exceptions used to allocate claims…"
+                            value={massTortForm.allocationNotes}
+                            onChange={(e) => updateMassTort('allocationNotes', e.target.value)}
+                          />
+                        </div>
+                        <div className="eia-field">
+                          <label htmlFor="mass-tort-block-start">Coverage block start</label>
+                          <input
+                            id="mass-tort-block-start"
+                            type="date"
+                            value={massTortForm.coverageBlockStart}
+                            onChange={(e) => updateMassTort('coverageBlockStart', e.target.value)}
+                          />
+                        </div>
+                        <div className="eia-field">
+                          <label htmlFor="mass-tort-block-end">Coverage block end</label>
+                          <input
+                            id="mass-tort-block-end"
+                            type="date"
+                            min={massTortForm.coverageBlockStart || undefined}
+                            value={massTortForm.coverageBlockEnd}
+                            onChange={(e) => updateMassTort('coverageBlockEnd', e.target.value)}
+                          />
+                        </div>
+                        <div className="eia-actions span-3" style={{ justifyContent: 'flex-start' }}>
+                          <button type="submit" disabled={Boolean(massTortSaving)}>
+                            {massTortSaving === MASS_TORT_STATUS.DRAFT ? 'Saving draft…' : 'Save draft'}
+                          </button>
+                          <button
+                            type="button"
+                            className="eia-btn-secondary"
+                            data-testid="mass-tort-complete"
+                            disabled={Boolean(massTortSaving)}
+                            onClick={() => submitMassTort(MASS_TORT_STATUS.COMPLETE)}
+                          >
+                            {massTortSaving === MASS_TORT_STATUS.COMPLETE
+                              ? 'Marking complete…'
+                              : 'Mark complete'}
+                          </button>
+                        </div>
+                      </form>
+
+                      {massTortFormError && (
+                        <p
+                          role="alert"
+                          data-testid="mass-tort-form-error"
+                          style={{ margin: '10px 0 0' }}
+                        >
+                          {massTortFormError}
+                        </p>
+                      )}
+                      {massTortNotice && (
+                        <p
+                          role="status"
+                          data-testid="mass-tort-notice"
+                          style={{ margin: '10px 0 0' }}
+                        >
+                          {massTortNotice}
+                        </p>
+                      )}
+                    </section>
+                  )}
+
+                  <MassTortContextPanel />
                 </section>
               )}
 
@@ -3298,6 +3766,42 @@ function BillingContextPanel() {
       </p>
       <div className="links">
         <CrossLink href="/payment">Open Payment workbench</CrossLink>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The profile is policy context for claim allocation, not a coverage change and
+ * not the allocation ledger. Direct Claims records the claim-side split and
+ * Policy records the coverage-block and limit context the split is measured
+ * against.
+ */
+function MassTortContextPanel() {
+  return (
+    <section
+      className="eia-context-panel"
+      aria-label="Mass tort profile context"
+      data-testid="mass-tort-context"
+    >
+      <h4>Mass tort profile context</h4>
+      <p>
+        <b>The profile guides allocation and coverage administration.</b> Tort type, trigger,
+        allocation method, and the coverage block give adjusters the policy context for
+        long-tail claims that span several years and layers.
+      </p>
+      <p>
+        <b>The profile does not change coverage or limits.</b> Coverage grants, limits, premium,
+        and the policy version stay on the policy record; completing this profile never edits
+        them.
+      </p>
+      <p>
+        <b>Policy owns the profile; Direct Claims owns allocations.</b> Direct Claims records how
+        a claim loss is split across policy years and layers, and Policy supplies the profile and
+        limit ledger that administration is measured against.
+      </p>
+      <div className="links">
+        <CrossLink href="/direct-claims">Open Direct Claims workbench</CrossLink>
       </div>
     </section>
   );

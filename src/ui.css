@@ -1039,6 +1039,7 @@ a.eia-btn-secondary.eia-billing-payment-link {
   line-height: 1.5;
 }
 .eia-renewal-carry-note b { color: var(--eia-navy); }
+.eia-mass-tort-complete { border-top: 3px solid var(--eia-green); }
 .eia-modal-actions {
   display: flex !important;
   flex-direction: row !important;

@@ -4,9 +4,25 @@
 
 The Policy remote renders the policy workbench: a paginated policy list, DRAFT
 creation with idempotency, lifecycle advance with ETag/If-Match, and a record
-detail with tabs for versions, coverages and limits, endorsements, insureds and
-locations, billing, cancellation/reinstatement, and an event-derived activity
-timeline.
+detail with tabs for versions, coverages and limits, mass tort, endorsements,
+insureds and locations, billing, cancellation/reinstatement, and an
+event-derived activity timeline.
+
+The Mass tort tab sits after Coverage & Limits and administers the policy-owned
+mass tort profile. `GET /mass-tort-profile` is read lazily on tab selection; a
+404 is the not-set empty state, not an error. `Set up profile` reveals the form
+for tort type, trigger, allocation method (with a short explanation of the
+selected method), allocation notes, and the coverage block start/end. `Save
+draft` and `Mark complete` both `PUT /mass-tort-profile` with
+`{tortType, triggerType, allocationMethod, allocationNotes, coverageBlockStart,
+coverageBlockEnd, status}` (`DRAFT` or `COMPLETE`). The three classification
+fields are required for a draft; completing additionally requires the allocation
+notes and a valid coverage-block window. The response is
+rendered as the profile summary, with a distinct complete-profile card. The tab
+owns its loading, empty, 400, 404, and unavailable states. A 409 re-reads the
+current profile before the operator retries. The context panel states that the
+profile guides allocation and coverage administration, never changes coverage or
+limits, and that Policy owns the profile while Direct Claims owns allocations.
 
 Renewal is a record-header action available while the policy is `ISSUED`,
 `IN_FORCE`, `ENDORSED`, or `REINSTATED`; every other status renders it disabled
@@ -44,8 +60,9 @@ version.
    section; tab data is loaded lazily when a tab is selected. The activity
    timeline is the exception: it is fetched when the policy is selected (and
    refreshed from its own card), because it is derived from the platform event
-   stream rather than from the policy aggregate. Billing has its own request
-   lifecycle so a missing or slow plan never blocks the policy record.
+   stream rather than from the policy aggregate. Billing and the mass tort
+   profile have their own request lifecycles so a missing or slow read never
+   blocks the policy record.
 3. Forms map one-to-one to the domain commands and refresh both the affected
    tab and the policy header/ETag after a successful mutation.
 
@@ -54,7 +71,9 @@ form validation, tolerant normalization of the billing read (plan, installments,
 summary), status/action rules, and the Payment hand-off URL. `src/renewal.js`
 holds the pure renewal helpers: status eligibility and context, UTC-safe date
 arithmetic, the term/premium form defaults, payload construction, and
-validation.
+validation. `src/massTort.js` holds the profile's tort, trigger, and allocation
+catalogs (with allocation explanations), form defaults and validation, the PUT
+payload, status helpers, and tolerant normalization of the profile read.
 
 No business rule is duplicated in the remote; canonical problems from the domain
 are rendered with their field errors.
@@ -79,7 +98,12 @@ plan payload, policy premium context, summary, mark paid/waive PATCH payloads,
 overdue rows, the Payment hand-off URL, read failures, and 409 conflicts;
 `tests/renewal.spec.js` covers action eligibility by status, modal term and
 premium/limit defaults, the renewal payload and headers, success selection and
-notice, the predecessor link and its navigation, and the 409 conflict.
+notice, the predecessor link and its navigation, and the 409 conflict;
+`tests/mass-tort.spec.js` covers the not-set empty state and setup form, the
+draft payload and header, complete validation (including a reversed coverage
+block), existing-value load and edit, the allocation/ownership context, a
+contained read failure with retry, a 400 problem inside the form, and the 409
+reload.
 
 ## Known SPEC gaps in this slice
 
@@ -88,7 +112,11 @@ notice, the predecessor link and its navigation, and the 409 conflict.
 - The predecessor policy cannot render a forward link to its successor because
   `PolicyDto` exposes only `renewedFromPolicyId`; the link is kept on the
   successor record.
-- No document, occurrence, mass tort, claims, or reinsurance views.
+- No document, occurrence, claims, or reinsurance views. The Mass tort tab
+  administers one profile and one coverage-block window; the SPEC
+  `policy_coverage_block` table (layers, aggregate treatment, sequence) and the
+  specialist profile fields (defense strategy, settlement authority, MDL and
+  trust references, review cadence) are not rendered yet.
 - The Billing tab covers the premium installment plan only; billing accounts,
   receivables, dunning, credit notes, commission statements, and disputes are
   not rendered.

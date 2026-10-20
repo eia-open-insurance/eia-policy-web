@@ -11,7 +11,7 @@
 
 ## Purpose
 
-Policy federated remote: screens, widgets, record tabs, and transaction composition. Direct policy lifecycle, coverage, limits, billing, underwriting, rating, and capacity.
+Policy federated remote: screens, widgets, record tabs, and transaction composition. Direct policy lifecycle, coverage, limits, mass tort profiles, billing, underwriting, rating, and capacity.
 
 ## Implemented slice
 
@@ -33,6 +33,20 @@ Opening a policy shows a record detail with tabs:
 - **Coverages & Limits** — coverage grants with per-occurrence, aggregate,
   sublimit, deductible, coinsurance, and remaining aggregate; add a coverage and
   post an idempotent aggregate erosion fact.
+- **Mass tort** — the policy-owned mass tort profile after Coverage & Limits.
+  With no profile, the tab explains mass-tort administration and offers
+  `Set up profile`; the form records the tort type, trigger, allocation method
+  with short explanations, allocation notes, and the coverage block start/end.
+  `GET`/`PUT /api/v1/policies/{policyId}/mass-tort-profile` load and replace the
+  profile, and `Save draft` / `Mark complete` move it between `DRAFT` and
+  `COMPLETE`. The classification fields are required to save; completion also
+  requires the allocation notes and the coverage block. A saved profile renders
+  its status and values, and a complete profile renders as a summary card. The
+  tab contains its own loading, empty, problem, and 404 states; a 409 reloads
+  the current profile before retrying.
+  The context panel states that the profile guides allocation and coverage
+  administration, does not change coverage or limits, and that Policy owns the
+  profile while Direct Claims owns allocations.
 - **Endorsements** — endorsement list and an endorse form (type, effective date,
   premium delta, coverage impact, backdate reason, approver/approval reference).
 - **Insureds & Locations** — insured roles and scheduled locations with add
@@ -84,7 +98,7 @@ npm run build
 npm test
 ```
 
-`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, the Payment hand-off URL, and 409 conflicts, and `tests/renewal.spec.js` covers the action's status eligibility, modal term/premium defaults, renewal payload and headers, success selection/notice, the predecessor link, and the 409 conflict. `@swc/core` is pinned to `1.10.7`.
+`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/mass-tort.spec.js` covers the profile empty state, draft save, complete validation, existing-value load and edit, context boundary, read failure, 400 problem, and 409 reload, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, the Payment hand-off URL, and 409 conflicts, and `tests/renewal.spec.js` covers the action's status eligibility, modal term/premium defaults, renewal payload and headers, success selection/notice, the predecessor link, and the 409 conflict. `@swc/core` is pinned to `1.10.7`.
 
 ## Responsibilities
 

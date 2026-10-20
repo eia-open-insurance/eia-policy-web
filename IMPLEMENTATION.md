@@ -5,7 +5,7 @@
 The Policy remote renders the policy workbench: a paginated policy list, DRAFT
 creation with idempotency, lifecycle advance with ETag/If-Match, and a record
 detail with tabs for versions, coverages and limits, endorsements, insureds and
-locations, and cancellation/reinstatement.
+locations, cancellation/reinstatement, and an event-derived activity timeline.
 
 ## Structure
 
@@ -14,7 +14,10 @@ locations, and cancellation/reinstatement.
 1. `api()` wraps `fetch` with `X-EIA-Tenant`, optional `If-Match` and
    `Idempotency-Key`, and exposes the `ETag` / `Idempotent-Replayed` headers.
 2. Collection and detail loaders keep one page envelope or detail object per
-   section; tab data is loaded lazily when a tab is selected.
+   section; tab data is loaded lazily when a tab is selected. The activity
+   timeline is the exception: it is fetched when the policy is selected (and
+   refreshed from its own card), because it is derived from the platform event
+   stream rather than from the policy aggregate.
 3. Forms map one-to-one to the domain commands and refresh both the affected
    tab and the policy header/ETag after a successful mutation.
 
@@ -33,7 +36,10 @@ npm test
 `tests/policy.spec.js` covers the page envelope, pagination, problem bodies, and
 ETag/If-Match; `tests/coverage.spec.js` covers adding a coverage with limits and
 applying aggregate erosion; `tests/endorsement.spec.js` covers issuing an
-endorsement, the new version row, and the `428 APPROVAL_REQUIRED` problem.
+endorsement, the new version row, and the `428 APPROVAL_REQUIRED` problem;
+`tests/activity.spec.js` covers the event timeline request path and tenant
+header, newest-first rendering, empty and 503-contained states, selection
+refetch, card refresh, and payload summaries.
 
 ## Known SPEC gaps in this slice
 

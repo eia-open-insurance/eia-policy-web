@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import ActivityTimeline, { activityEndpoint, sortActivityItems } from './ActivityTimeline.jsx';
 import EntityPicker from './EntityPicker.jsx';
 import { partyEndpoint, partyRecordLabel } from './party.js';
 
@@ -22,7 +23,8 @@ const TABS = [
   { id: 'coverages', label: 'Coverages & Limits' },
   { id: 'endorsements', label: 'Endorsements' },
   { id: 'parties', label: 'Insureds & Locations' },
-  { id: 'cancellation', label: 'Cancellation' }
+  { id: 'cancellation', label: 'Cancellation' },
+  { id: 'activity', label: 'Activity' }
 ];
 
 function isoDate(yearOffset) {
@@ -219,6 +221,8 @@ export default function App() {
   const relatedRequestRef = useRef(0);
   const [documents, setDocuments] = useState({ items: [], loading: false, error: '' });
   const documentsRequestRef = useRef(0);
+  const [activity, setActivity] = useState({ items: [], loading: false, error: '' });
+  const activityRequestRef = useRef(0);
 
   const [selected, setSelected] = useState(null);
   const [tab, setTab] = useState('overview');
@@ -424,6 +428,7 @@ export default function App() {
       });
       loadRelated(policyId).catch(() => {});
       loadDocuments(policyId).catch(() => {});
+      loadActivity(policyId).catch(() => {});
       if (!options.keepTab) setTab('overview');
       await loadCurrentVersion(policyId);
       setVersions([]);
@@ -531,8 +536,55 @@ export default function App() {
     setDocuments({ items: [], loading: false, error: '' });
   }
 
+  /**
+   * The activity timeline is derived from the platform event stream, not from
+   * the policy aggregate. It loads as soon as a record is selected, but remains
+   * card-local: an unavailable event service never blocks the policy record.
+   */
+  async function loadActivity(policyId) {
+    const requestId = activityRequestRef.current + 1;
+    activityRequestRef.current = requestId;
+    if (!policyId) {
+      setActivity({ items: [], loading: false, error: '' });
+      return;
+    }
+    setActivity({ items: [], loading: true, error: '' });
+    try {
+      const result = await api(activityEndpoint(policyId));
+      if (activityRequestRef.current !== requestId) return;
+      if (!result.response.ok) {
+        setActivity({
+          items: [],
+          loading: false,
+          error: 'Activity timeline is temporarily unavailable.'
+        });
+        return;
+      }
+      setActivity({
+        items: sortActivityItems(pageItems(result.body)),
+        loading: false,
+        error: ''
+      });
+    } catch {
+      if (activityRequestRef.current !== requestId) return;
+      setActivity({
+        items: [],
+        loading: false,
+        error: 'Activity timeline is temporarily unavailable.'
+      });
+    }
+  }
+
+  function clearActivity() {
+    activityRequestRef.current += 1;
+    setActivity({ items: [], loading: false, error: '' });
+  }
+
   async function loadTabData(tabId, policyId = selected?.id) {
     if (!policyId) return;
+    // Activity has its own request lifecycle and is loaded on selection; the
+    // generic tab loader must not turn it into a duplicate lookup.
+    if (tabId === 'activity') return;
     setTabLoading(true);
     setError('');
     try {
@@ -584,6 +636,9 @@ export default function App() {
 
   function selectTab(tabId) {
     setTab(tabId);
+    // Activity is fetched when the record is selected; clicking the tab only
+    // reveals the already-loaded card. Refresh re-reads the event stream.
+    if (tabId === 'activity') return;
     loadTabData(tabId).catch((e) => setError(e.message));
   }
 
@@ -616,6 +671,7 @@ export default function App() {
     setCurrentVersion(null);
     clearRelated();
     clearDocuments();
+    clearActivity();
   }
 
   async function refreshWorkspace() {
@@ -2337,6 +2393,25 @@ export default function App() {
                       </div>
                     </form>
                   </section>
+                </section>
+              )}
+
+              {tab === 'activity' && (
+                <section
+                  id="panel-activity"
+                  role="tabpanel"
+                  aria-labelledby="tab-activity"
+                >
+                  <div className="eia-section-title">
+                    <h2>Activity</h2>
+                    <span className="eia-muted">Newest first · derived from policy events</span>
+                  </div>
+                  <ActivityTimeline
+                    items={activity.items}
+                    loading={activity.loading}
+                    error={activity.error}
+                    onRefresh={() => loadActivity(selectedPolicy.id)}
+                  />
                 </section>
               )}
             </>

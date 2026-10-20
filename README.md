@@ -40,6 +40,11 @@ Opening a policy shows a record detail with tabs:
 - **Cancellation** — cancellation history with the computed return premium, a
   cancel form, and a reinstatement form that requires approval and premium
   evidence.
+- **Activity** — the record's event-derived, append-only timeline, newest first,
+  with event status and concise payload facts. It reads
+  `GET /api/v1/events/aggregate/{policyId}?limit=50` with `X-EIA-Tenant`, loads
+  when a policy is selected, and stays contained in its card when the event
+  service is unavailable.
 
 Every second-slice mutation sends the current policy ETag as `If-Match` and a
 fresh `Idempotency-Key`; the returned ETag updates the header immediately.
@@ -58,7 +63,7 @@ npm run build
 npm test
 ```
 
-`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, and `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem. `@swc/core` is pinned to `1.10.7`.
+`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, and `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts. `@swc/core` is pinned to `1.10.7`.
 
 ## Responsibilities
 

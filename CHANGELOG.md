@@ -41,8 +41,23 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   Policy never creates a payment.
 - Billing context panel stating that billing is premium collection, Payment owns
   disbursement and approval, and a plan does not change policy coverage.
-- Playwright coverage for plan creation payload, summary, mark paid/waive
-  payloads, overdue state, Payment URL, read failure, and 409 conflicts.
+- `Link payment` action on `DUE`/`OVERDUE` installments: the modal reads
+  `GET /api/v1/payments?sourceType=POLICY&sourceId=<policyId>` and lists payment
+  number, status, amount/currency, created date, and payee when present, with
+  loading, empty, read-failure, and retry states. Policy never creates a payment.
+- Selecting a payment with an amount different from the installment shows a
+  reconciliation warning while keeping `Apply payment` available; the Payment
+  keeps its own amount and is not altered.
+- `Apply payment` sends
+  `PATCH /api/v1/policies/{policyId}/billing/installments/{installmentId}`
+  with `{status: "PAID", paymentId}`; the row then shows the linked payment
+  id/number and the modal stays open with the canonical problem on failure,
+  including 409.
+- Playwright coverage for the payment picker fetch/query/tenant header,
+  selection and apply payload, linked id/number, amount warning, empty state,
+  read failure and retry, and a 409 PATCH conflict, alongside the existing plan
+  creation payload, summary, mark paid/waive payloads, overdue state, Payment
+  URL, read failure, and 409 conflicts.
 - Renewal action in the policy record header for `ISSUED`, `IN_FORCE`,
   `ENDORSED`, and `REINSTATED` policies; other statuses render it disabled with
   the reason as context.

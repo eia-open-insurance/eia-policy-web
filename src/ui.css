@@ -982,6 +982,43 @@ a.eia-btn-secondary.eia-billing-payment-link {
 }
 .eia-context-panel p + p { margin-top: 6px; }
 
+/* Billing: link an existing Payment to a DUE/OVERDUE installment */
+.eia-modal.eia-payment-link-modal { width: min(960px, 100%); }
+.eia-payment-link-state { margin: 10px 0 0; }
+.eia-payment-link-empty {
+  margin-top: 12px;
+  padding: 20px;
+  text-align: left;
+}
+.eia-payment-link-empty p { margin: 0 0 6px; }
+.eia-payment-link-empty a { color: var(--eia-blue); font-weight: 600; }
+.eia-payment-link-modal .eia-table-wrap { margin-top: 12px; }
+.eia-payment-table input[type="radio"] {
+  width: 16px !important;
+  height: 16px !important;
+  margin: 0;
+  padding: 0 !important;
+  accent-color: var(--eia-blue);
+  cursor: pointer;
+}
+.eia-payment-table code { white-space: nowrap; }
+.eia-payment-table td:nth-child(4),
+.eia-payment-table td:nth-child(5) { white-space: nowrap; }
+.eia-payment-table tr.selected td { background: #eef5fb !important; }
+.eia-payment-warning {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #e6cf9a;
+  border-radius: 6px;
+  background: #fffaf0;
+  color: #745200;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.eia-payment-warning b { color: #5c3f00; }
+.eia-payment-link-modal .eia-modal-actions { margin-top: 14px; }
+.eia-payment-link-modal .eia-context-panel { margin-top: 16px; }
+
 /* Policy renewal: a modal that creates the next term as a new record. */
 .eia-renew-action { display: inline-flex; }
 .eia-renew-action button:disabled { cursor: not-allowed; }

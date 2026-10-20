@@ -299,3 +299,120 @@ export function billingPaymentHref(policy, installment) {
   if (policy.insuredPartyId) params.set('payeePartyId', policy.insuredPartyId);
   return `/payment?${params.toString()}`;
 }
+
+/**
+ * Existing payments already linked to the policy source. Policy reads this
+ * list so an operator can attach a payment that exists; it never creates one
+ * and never changes the Payment record.
+ */
+export function policyPaymentsEndpoint(policyId) {
+  if (!policyId) return '';
+  const params = new URLSearchParams();
+  params.set('sourceType', 'POLICY');
+  params.set('sourceId', policyId);
+  return `/api/v1/payments?${params.toString()}`;
+}
+
+function paymentPayee(row) {
+  const direct = firstDefined(
+    row.payeeName,
+    row.payeeDisplayName,
+    row.payeePartyName,
+    row.payeeLabel
+  );
+  if (direct !== undefined) return String(direct);
+  const payee = row.payee;
+  if (typeof payee === 'string' && payee) return payee;
+  if (payee && typeof payee === 'object') {
+    const nested = firstDefined(
+      payee.displayName,
+      payee.name,
+      payee.label,
+      payee.partyNumber,
+      payee.id
+    );
+    if (nested !== undefined) return String(nested);
+  }
+  return row.payeePartyId === undefined || row.payeePartyId === null
+    ? ''
+    : String(row.payeePartyId);
+}
+
+function normalizePayment(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+  const id = String(row.id || row.paymentId || '');
+  if (!id) return null;
+  const number = firstDefined(
+    row.paymentNumber,
+    row.number,
+    row.paymentReference,
+    row.reference,
+    id
+  );
+  const amount = firstDefined(row.amount, row.paymentAmount, row.instructedAmount);
+  return {
+    id,
+    paymentNumber: number === undefined ? id : String(number),
+    status: String(row.status || '').toUpperCase(),
+    amount: amount === undefined ? null : amount,
+    currency: String(firstDefined(row.currency, row.paymentCurrency, '') || '').toUpperCase(),
+    createdDate: dateOnly(firstDefined(
+      row.createdAt,
+      row.createdOn,
+      row.created,
+      row.creationDate,
+      ''
+    )),
+    payee: paymentPayee(row)
+  };
+}
+
+/**
+ * Tolerant read of GET /api/v1/payments: a bare array or an `{items}` envelope
+ * during rollout. Rows without an id cannot be linked, so they are dropped
+ * instead of rendered as unselectable noise.
+ */
+export function normalizePolicyPayments(body) {
+  const rows = Array.isArray(body)
+    ? body
+    : Array.isArray(body?.items)
+      ? body.items
+      : [];
+  return rows
+    .map((row) => normalizePayment(row))
+    .filter((row) => row !== null);
+}
+
+export function paymentStatusTone(status) {
+  const normalized = String(status || '').toUpperCase();
+  if (['APPROVED', 'SCHEDULED', 'SUBMITTED', 'ACCEPTED', 'PROCESSING', 'PARTIALLY_PAID',
+    'PAID', 'RECONCILED'].includes(normalized)) {
+    return 'green';
+  }
+  if (['REJECTED', 'FAILED', 'CANCELLED', 'STOPPED', 'RETURNED', 'REVERSED', 'VOID']
+    .includes(normalized)) {
+    return 'red';
+  }
+  if (['DRAFT', 'PENDING_AUTHORITY'].includes(normalized)) return 'amber';
+  return 'blue';
+}
+
+/**
+ * The Payment keeps its own amount and currency; the installment keeps its
+ * scheduled amount. A differing amount is surfaced for reconciliation, not
+ * corrected. A missing amount on either side cannot be compared.
+ */
+export function paymentAmountDiffers(payment, installment) {
+  const paymentAmount = numeric(payment?.amount);
+  const installmentAmount = numeric(installment?.amount);
+  if (paymentAmount === null || installmentAmount === null) return false;
+  return paymentAmount !== installmentAmount;
+}
+
+/**
+ * Linking names an existing Payment; it marks the installment collected without
+ * creating, executing, approving, or altering the Payment.
+ */
+export function installmentPaymentPayload(payment) {
+  return { status: 'PAID', paymentId: payment?.id || '' };
+}

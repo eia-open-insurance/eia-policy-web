@@ -6,6 +6,9 @@ const POLICY_ID = 'aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa';
 const INSURED_PARTY_ID = 'bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb';
 const PLAN_ID = 'cccccccc-cccc-7ccc-8ccc-cccccccccccc';
 const PAYMENT_ID = 'dddddddd-dddd-7ddd-8ddd-dddddddddddd';
+const PAYMENT_ID_2 = 'eeeeeeee-eeee-7eee-8eee-eeeeeeeeeeee';
+const PAYMENT_NUMBER = 'PAY-2026-0000001';
+const PAYMENT_NUMBER_2 = 'PAY-2026-0000002';
 
 const POLICY = {
   id: POLICY_ID,
@@ -53,6 +56,27 @@ function installment(number, overrides = {}) {
     status: 'DUE',
     paidDate: null,
     paymentId: null,
+    ...overrides
+  };
+}
+
+function policyPayment(overrides = {}) {
+  return {
+    id: PAYMENT_ID,
+    tenantId: TENANT,
+    paymentNumber: PAYMENT_NUMBER,
+    paymentType: 'PREMIUM',
+    status: 'APPROVED',
+    amount: '30000.00',
+    currency: 'USD',
+    payeePartyId: INSURED_PARTY_ID,
+    paymentDate: '2026-03-01',
+    version: 1,
+    createdAt: '2026-03-01T12:00:00Z',
+    updatedAt: '2026-03-01T12:00:00Z',
+    sourceType: 'POLICY',
+    sourceId: POLICY_ID,
+    sourceReference: `${POLICY.policyNumber} installment 1`,
     ...overrides
   };
 }
@@ -124,14 +148,18 @@ async function installMocks(page, options = {}) {
   const state = {
     plan: options.plan ? { ...options.plan } : null,
     installments: (options.installments || []).map((row) => ({ ...row })),
+    payments: (options.payments || []).map((row) => ({ ...row })),
     planPosts: [],
     patches: [],
+    paymentGets: [],
     billingGets: 0,
     postStatus: options.postStatus || 201,
     postError: options.postError || null,
     patchStatus: options.patchStatus || 200,
     patchError: options.patchError || null,
-    getStatus: options.getStatus || 200
+    getStatus: options.getStatus || 200,
+    paymentListStatus: options.paymentListStatus || 200,
+    paymentListError: options.paymentListError || null
   };
 
   await page.route('**/api/v1/policies**', async (route) => {
@@ -244,6 +272,27 @@ async function installMocks(page, options = {}) {
 
   await mockRelated(page);
   await mockPartyDetail(page);
+  await page.route('**/api/v1/payments**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() !== 'GET' || url.pathname !== '/api/v1/payments') {
+      await route.fulfill({ status: 404, body: `unexpected route ${request.method()} ${url.pathname}` });
+      return;
+    }
+    state.paymentGets.push({
+      headers: request.headers(),
+      query: Object.fromEntries(url.searchParams)
+    });
+    if (state.paymentListStatus >= 400) {
+      await json(route, state.paymentListStatus, state.paymentListError || problem(
+        state.paymentListStatus,
+        'Policy payments are temporarily unavailable.',
+        'PAYMENTS_UNAVAILABLE'
+      ));
+      return;
+    }
+    await json(route, 200, { items: state.payments });
+  });
   await page.route('**/api/v1/documents**', async (route) => {
     await json(route, 200, { items: [] });
   });
@@ -350,15 +399,18 @@ test('renders summary, paid reference, and overdue installments', async ({ page 
   await expect(paidRow).toContainText(PAYMENT_ID);
   await expect(paidRow.getByText('PAID', { exact: true })).toBeVisible();
   await expect(paidRow.getByRole('button', { name: 'Mark paid' })).toHaveCount(0);
+  await expect(paidRow.getByRole('button', { name: 'Link payment' })).toHaveCount(0);
   await expect(paidRow.getByText('Create payment')).toHaveCount(0);
 
   const waivedRow = page.getByTestId('installment-row-installment-4');
   await expect(waivedRow.getByText('WAIVED', { exact: true })).toBeVisible();
+  await expect(waivedRow.getByRole('button', { name: 'Link payment' })).toHaveCount(0);
   await expect(waivedRow.getByText('Create payment')).toHaveCount(0);
 
   await expect(page.getByTestId('create-payment-installment-1')).toBeVisible();
   await expect(page.getByTestId('create-payment-installment-2')).toBeVisible();
   await expect(page.getByTestId(/^create-payment-/)).toHaveCount(2);
+  await expect(page.getByTestId(/^link-payment-/)).toHaveCount(2);
 });
 
 test('marks an installment paid and waives another with PATCH payloads', async ({ page }) => {
@@ -390,6 +442,186 @@ test('marks an installment paid and waives another with PATCH payloads', async (
   });
   expect(state.patches[0].body.paymentId).toBeUndefined();
   expect(state.patches[1].body.paymentId).toBeUndefined();
+});
+
+test('links an existing policy payment to an overdue installment', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: PLAN,
+    installments: [
+      installment(1),
+      installment(2, { status: 'OVERDUE', amount: '45000.50' })
+    ],
+    payments: [
+      policyPayment({
+        amount: '45000.50',
+        sourceReference: `${POLICY.policyNumber} installment 2`
+      }),
+      policyPayment({
+        id: PAYMENT_ID_2,
+        paymentNumber: PAYMENT_NUMBER_2,
+        status: 'DRAFT',
+        amount: '1000.00'
+      })
+    ]
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId('link-payment-installment-2').click();
+  const dialog = page.getByTestId('link-payment-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Link payment to installment 2' }))
+    .toBeVisible();
+
+  const table = dialog.getByRole('table', { name: 'Policy payments' });
+  await expect(table.getByRole('columnheader')).toHaveText([
+    'Select',
+    'Payment',
+    'Status',
+    'Amount',
+    'Created',
+    'Payee'
+  ]);
+  const paymentRow = dialog.getByTestId(`payment-row-${PAYMENT_ID}`);
+  await expect(paymentRow).toContainText(PAYMENT_NUMBER);
+  await expect(paymentRow).toContainText('APPROVED');
+  await expect(paymentRow).toContainText('$45,000.50');
+  await expect(paymentRow).toContainText('USD');
+  await expect(paymentRow).toContainText('2026-03-01');
+  await expect(paymentRow).toContainText(INSURED_PARTY_ID);
+
+  expect(state.paymentGets).toHaveLength(1);
+  expect(state.paymentGets[0].query).toEqual({ sourceType: 'POLICY', sourceId: POLICY_ID });
+  expect(state.paymentGets[0].headers['x-eia-tenant']).toBe(TENANT);
+
+  const apply = dialog.getByRole('button', { name: 'Apply payment' });
+  await expect(apply).toBeDisabled();
+  await dialog.getByRole('radio', { name: `Select ${PAYMENT_NUMBER}` }).check();
+  await expect(apply).toBeEnabled();
+  await expect(dialog.getByTestId('payment-amount-warning')).toHaveCount(0);
+
+  await apply.click();
+
+  await expect(page.getByRole('status')).toContainText(
+    `Installment 2 linked to ${PAYMENT_NUMBER}.`
+  );
+  await expect(page.getByTestId('link-payment-dialog')).toHaveCount(0);
+  const row = page.getByTestId('installment-row-installment-2');
+  await expect(row).toContainText('PAID');
+  await expect(row).toContainText(PAYMENT_ID);
+  await expect(row.getByTestId('payment-number-installment-2')).toHaveText(PAYMENT_NUMBER);
+
+  expect(state.patches).toHaveLength(1);
+  expect(state.patches[0]).toMatchObject({
+    path: `/api/v1/policies/${POLICY_ID}/billing/installments/installment-2`,
+    body: { status: 'PAID', paymentId: PAYMENT_ID }
+  });
+  expect(state.billingGets).toBe(2);
+});
+
+test('warns when the selected payment amount differs from the installment', async ({ page }) => {
+  await installMocks(page, {
+    plan: PLAN,
+    installments: [installment(1)],
+    payments: [
+      policyPayment({ amount: '28500.25' }),
+      policyPayment({
+        id: PAYMENT_ID_2,
+        paymentNumber: PAYMENT_NUMBER_2,
+        amount: '30000.00'
+      })
+    ]
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId('link-payment-installment-1').click();
+  const dialog = page.getByTestId('link-payment-dialog');
+  const warning = dialog.getByTestId('payment-amount-warning');
+
+  await dialog.getByRole('radio', { name: `Select ${PAYMENT_NUMBER}` }).check();
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText('Amounts differ');
+  await expect(warning).toContainText('$28,500.25');
+  await expect(warning).toContainText('$30,000.00');
+  await expect(warning).toContainText('not changed');
+  await expect(dialog.getByRole('button', { name: 'Apply payment' })).toBeEnabled();
+
+  await dialog.getByRole('radio', { name: `Select ${PAYMENT_NUMBER_2}` }).check();
+  await expect(warning).toHaveCount(0);
+});
+
+test('shows an empty state when the policy has no source payments', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: PLAN,
+    installments: [installment(1)],
+    payments: []
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId('link-payment-installment-1').click();
+  const dialog = page.getByTestId('link-payment-dialog');
+
+  await expect(dialog.getByTestId('link-payment-empty')).toContainText(
+    'No payments found for this policy.'
+  );
+  await expect(dialog.getByTestId('link-payment-loading')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Apply payment' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Create payment' })).toHaveCount(0);
+  await expect(dialog.getByRole('link', { name: 'Open Payment workbench' }))
+    .toHaveAttribute('href', '/payment');
+  expect(state.paymentGets).toHaveLength(1);
+  expect(state.paymentGets[0].query).toEqual({ sourceType: 'POLICY', sourceId: POLICY_ID });
+});
+
+test('keeps the payment picker open when the payment read fails and retries', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: PLAN,
+    installments: [installment(1)],
+    paymentListStatus: 503
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId('link-payment-installment-1').click();
+  const dialog = page.getByTestId('link-payment-dialog');
+  await expect(dialog.getByTestId('link-payment-error')).toContainText(
+    'Policy payments are temporarily unavailable.'
+  );
+
+  await dialog.getByRole('button', { name: 'Retry' }).click();
+  await expect.poll(() => state.paymentGets.length).toBe(2);
+  await expect(dialog.getByTestId('link-payment-error')).toContainText(
+    'Policy payments are temporarily unavailable.'
+  );
+});
+
+test('keeps the linked installment unchanged when the PATCH is rejected with 409', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: PLAN,
+    installments: [installment(1)],
+    payments: [policyPayment()],
+    patchStatus: 409,
+    patchError: problem(
+      409,
+      'Installment 1 was already paid by another user.',
+      'INSTALLMENT_CONFLICT'
+    )
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId('link-payment-installment-1').click();
+  const dialog = page.getByTestId('link-payment-dialog');
+  await dialog.getByRole('radio', { name: `Select ${PAYMENT_NUMBER}` }).check();
+  await dialog.getByRole('button', { name: 'Apply payment' }).click();
+
+  await expect(dialog.getByRole('alert')).toContainText(
+    'Installment 1 was already paid by another user.'
+  );
+  await expect(dialog).toBeVisible();
+  const row = page.getByTestId('installment-row-installment-1');
+  await expect(row).toContainText('DUE');
+  await expect(row.getByTestId('payment-id-installment-1')).toHaveCount(0);
+
+  expect(state.patches).toHaveLength(1);
+  expect(state.patches[0].body).toEqual({ status: 'PAID', paymentId: PAYMENT_ID });
 });
 
 test('offers a Payment hand-off URL for collectible installments only', async ({ page }) => {

@@ -57,8 +57,15 @@ Opening a policy shows a record detail with tabs:
   With a plan, it shows the total premium, paid, outstanding, and overdue
   summary plus an installment table (number, due date, amount, status, paid
   date/payment id, action). `DUE` and `OVERDUE` installments can be marked paid
-  or waived through `PATCH .../billing/installments/{installmentId}`. The
-  Payment hand-off for those installments builds
+  or waived through `PATCH .../billing/installments/{installmentId}`. They also
+  offer **Link payment**: the modal reads
+  `GET /api/v1/payments?sourceType=POLICY&sourceId=<policyId>` and lists the
+  payment number, status, amount/currency, created date, and payee when
+  present. Selecting a payment whose amount differs from the installment shows
+  a reconciliation warning; `Apply payment` sends
+  `{status: "PAID", paymentId}` and the row then shows the linked payment
+  id/number. Policy never creates, executes, approves, or changes the Payment.
+  The Payment hand-off for those installments builds
   `/payment?new=1&sourceType=POLICY&sourceId=…&sourceReference=<policyNumber> installment <n>&amount=…&currency=…&payeePartyId=…`
   and never creates a payment from Policy.
 - **Cancellation** — cancellation history with the computed return premium, a
@@ -98,7 +105,7 @@ npm run build
 npm test
 ```
 
-`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/mass-tort.spec.js` covers the profile empty state, draft save, complete validation, existing-value load and edit, context boundary, read failure, 400 problem, and 409 reload, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, the Payment hand-off URL, and 409 conflicts, and `tests/renewal.spec.js` covers the action's status eligibility, modal term/premium defaults, renewal payload and headers, success selection/notice, the predecessor link, and the 409 conflict. `@swc/core` is pinned to `1.10.7`.
+`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/mass-tort.spec.js` covers the profile empty state, draft save, complete validation, existing-value load and edit, context boundary, read failure, 400 problem, and 409 reload, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, linking an existing policy payment (fetch, selection/apply payload, amount warning, empty, read failure, and 409), the Payment hand-off URL, and 409 conflicts, and `tests/renewal.spec.js` covers the action's status eligibility, modal term/premium defaults, renewal payload and headers, success selection/notice, the predecessor link, and the 409 conflict. `@swc/core` is pinned to `1.10.7`.
 
 ## Responsibilities
 

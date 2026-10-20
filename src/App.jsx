@@ -11,8 +11,13 @@ import {
   canManageInstallment,
   defaultBillingForm,
   emptyBillingState,
+  installmentPaymentPayload,
   isOverdue,
   normalizeBilling,
+  normalizePolicyPayments,
+  paymentAmountDiffers,
+  paymentStatusTone,
+  policyPaymentsEndpoint,
   validateBillingForm
 } from './billing.js';
 import {
@@ -307,6 +312,8 @@ export default function App() {
   const [billingForm, setBillingForm] = useState(() => defaultBillingForm(null));
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingInstallmentId, setBillingInstallmentId] = useState(null);
+  const [linkPaymentInstallment, setLinkPaymentInstallment] = useState(null);
+  const [linkedPayments, setLinkedPayments] = useState({});
 
   async function load(pageToLoad = 0) {
     setLoading(true);
@@ -505,6 +512,8 @@ export default function App() {
       setBillingForm(defaultBillingForm(detail.body));
       setBillingInstallmentId(null);
       setBillingBusy(false);
+      setLinkPaymentInstallment(null);
+      setLinkedPayments({});
       clearMassTort();
       setMassTortForm(defaultMassTortForm(null, detail.body));
       if (!options.keepTab) {
@@ -863,6 +872,8 @@ export default function App() {
     clearBilling();
     setBillingForm(defaultBillingForm(null));
     setBillingInstallmentId(null);
+    setLinkPaymentInstallment(null);
+    setLinkedPayments({});
     clearMassTort();
   }
 
@@ -1252,6 +1263,43 @@ export default function App() {
       setError(e.message);
     } finally {
       setBillingInstallmentId(null);
+    }
+  }
+
+  // ---- link an existing payment --------------------------------------
+  function openPaymentLink(installment) {
+    if (!installment?.id) return;
+    setError('');
+    setLinkPaymentInstallment(installment);
+  }
+
+  function closePaymentLink() {
+    setLinkPaymentInstallment(null);
+  }
+
+  /**
+   * The PATCH links the existing Payment and marks the installment collected.
+   * The Payment keeps its own status, amount, and approval path; the selected
+   * payment number is retained locally so the row can show it after the
+   * billing read returns only the stored paymentId.
+   */
+  function paymentLinked(installment, payment) {
+    if (!installment?.id || !payment?.id) return;
+    setError('');
+    setLinkedPayments((current) => ({
+      ...current,
+      [installment.id]: {
+        id: payment.id,
+        number: payment.paymentNumber || ''
+      }
+    }));
+    setLinkPaymentInstallment(null);
+    setNotice(
+      `Installment ${installment.installmentNumber} linked to `
+      + `${payment.paymentNumber || payment.id}.`
+    );
+    if (selected?.id) {
+      loadBilling(selected.id, selected.policy).catch(() => {});
     }
   }
 
@@ -3189,6 +3237,9 @@ export default function App() {
                           <tbody>
                             {billing.installments.map((installment) => {
                               const overdue = isOverdue(installment.status);
+                              const linkedPaymentNumber = installment.paymentNumber
+                                || linkedPayments[installment.id]?.number
+                                || '';
                               return (
                                 <tr
                                   key={installment.id}
@@ -3215,7 +3266,7 @@ export default function App() {
                                     )}
                                   </td>
                                   <td>
-                                    {installment.paidDate || installment.paymentId ? (
+                                    {installment.paidDate || installment.paymentId || linkedPaymentNumber ? (
                                       <>
                                         {installment.paidDate || '—'}
                                         {installment.paymentId ? (
@@ -3229,12 +3280,32 @@ export default function App() {
                                             </code>
                                           </>
                                         ) : null}
+                                        {linkedPaymentNumber ? (
+                                          <>
+                                            {' · '}
+                                            <span
+                                              className="eia-mono"
+                                              data-testid={`payment-number-${installment.id}`}
+                                            >
+                                              {linkedPaymentNumber}
+                                            </span>
+                                          </>
+                                        ) : null}
                                       </>
                                     ) : '—'}
                                   </td>
                                   <td>
                                     {canManageInstallment(installment.status) ? (
                                       <span className="eia-billing-actions">
+                                        <button
+                                          type="button"
+                                          className="eia-btn-secondary"
+                                          data-testid={`link-payment-${installment.id}`}
+                                          disabled={billingInstallmentId === installment.id}
+                                          onClick={() => openPaymentLink(installment)}
+                                        >
+                                          Link payment
+                                        </button>
                                         <button
                                           type="button"
                                           className="eia-btn-secondary"
@@ -3662,6 +3733,15 @@ export default function App() {
           </div>
         </div>
       )}
+      {linkPaymentInstallment && selectedPolicy && (
+        <LinkPaymentDialog
+          policyId={selectedPolicy.id}
+          installment={linkPaymentInstallment}
+          currency={billing.summary?.currency || selectedPolicy.premiumCurrency || ''}
+          onClose={closePaymentLink}
+          onLinked={(payment) => paymentLinked(linkPaymentInstallment, payment)}
+        />
+      )}
     </main>
   );
 }
@@ -3757,8 +3837,14 @@ function BillingContextPanel() {
         installment is due against the selected policy premium.
       </p>
       <p>
-        <b>Payment owns disbursement and approval.</b> Policy only hands an installment to Payment
-        through the Create payment link; it never creates or approves a payment.
+        <b>Payment owns disbursement and approval.</b> Policy hands an installment to Payment
+        through the Create payment link, or links a Payment that already exists; it never creates,
+        executes, or approves a payment.
+      </p>
+      <p>
+        <b>Applying an existing payment marks the installment collected.</b> The installment stores
+        the payment id as collection evidence; the Payment keeps its own status, amount, currency,
+        and approval path. Amounts may differ and both are shown for reconciliation.
       </p>
       <p>
         <b>A billing plan does not change policy coverage.</b> Coverage, limits, premium, and the
@@ -3768,6 +3854,274 @@ function BillingContextPanel() {
         <CrossLink href="/payment">Open Payment workbench</CrossLink>
       </div>
     </section>
+  );
+}
+
+/**
+ * Links an existing policy-source Payment to a DUE/OVERDUE installment. Policy
+ * reads GET /api/v1/payments?sourceType=POLICY&sourceId=… and PATCHes the
+ * installment; nothing here creates, executes, or changes a Payment.
+ */
+function LinkPaymentDialog({ policyId, installment, currency, onClose, onLinked }) {
+  const [payments, setPayments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [selectedId, setSelectedId] = useState('');
+  const [applyError, setApplyError] = useState('');
+  const [applying, setApplying] = useState(false);
+  const requestRef = useRef(0);
+
+  const installmentCurrency = installment.currency || currency || '';
+  const selected = payments.find((payment) => payment.id === selectedId) || null;
+  const amountsDiffer = selected ? paymentAmountDiffers(selected, installment) : false;
+
+  async function loadPayments() {
+    if (!policyId) {
+      setPayments([]);
+      setLoading(false);
+      setLoadError('Policy payments are unavailable for this record.');
+      return;
+    }
+    const requestId = requestRef.current + 1;
+    requestRef.current = requestId;
+    setLoading(true);
+    setLoadError('');
+    setSelectedId('');
+    setApplyError('');
+    try {
+      const result = await api(policyPaymentsEndpoint(policyId));
+      if (requestRef.current !== requestId) return;
+      if (!result.response.ok) {
+        setPayments([]);
+        setLoadError('Policy payments are temporarily unavailable.');
+        return;
+      }
+      setPayments(normalizePolicyPayments(result.body));
+    } catch {
+      if (requestRef.current !== requestId) return;
+      setPayments([]);
+      setLoadError('Policy payments are temporarily unavailable.');
+    } finally {
+      if (requestRef.current === requestId) setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadPayments();
+    return () => {
+      requestRef.current += 1;
+    };
+  }, [policyId]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !applying) onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [applying, onClose]);
+
+  function selectPayment(paymentId) {
+    setSelectedId(paymentId);
+    setApplyError('');
+  }
+
+  async function applyPayment(event) {
+    event.preventDefault();
+    if (!selected || applying) return;
+    setApplyError('');
+    setApplying(true);
+    try {
+      const result = await api(
+        `/api/v1/policies/${policyId}/billing/installments/${encodeURIComponent(installment.id)}`,
+        { method: 'PATCH', body: installmentPaymentPayload(selected) }
+      );
+      if (!result.response.ok) {
+        setApplyError(problemMessage(result.body, `Payment link failed: ${result.response.status}`));
+        return;
+      }
+      onLinked(selected);
+    } catch (e) {
+      setApplyError(e.message);
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  return (
+    <div className="eia-modal-backdrop">
+      <div
+        className="eia-modal eia-payment-link-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="link-payment-title"
+        aria-describedby="link-payment-description"
+        data-testid="link-payment-dialog"
+      >
+        <div className="eia-section-title" style={{ marginTop: 0 }}>
+          <h2 id="link-payment-title">
+            Link payment to installment {installment.installmentNumber}
+          </h2>
+          <span className="eia-badge">{installment.status}</span>
+        </div>
+        <p className="eia-modal-lede" id="link-payment-description">
+          Choose an existing Payment for this policy. Applying marks installment{' '}
+          {installment.installmentNumber} collected; it does not execute, approve, create, or alter
+          the Payment.
+        </p>
+        <p
+          className="eia-muted eia-modal-currency-context"
+          data-testid="link-payment-installment-context"
+        >
+          Due {installment.dueDate || '—'} · scheduled{' '}
+          <b>{formatMoney(installment.amount, installmentCurrency)}</b>
+          {' · '}policy source <b>POLICY</b>
+        </p>
+
+        {loading ? (
+          <p className="eia-muted eia-payment-link-state" data-testid="link-payment-loading">
+            Loading policy payments…
+          </p>
+        ) : loadError ? (
+          <div className="eia-payment-link-state">
+            <p role="alert" data-testid="link-payment-error" style={{ marginTop: 0 }}>
+              {loadError}
+            </p>
+            <button type="button" className="eia-btn-secondary" onClick={loadPayments}>
+              Retry
+            </button>
+          </div>
+        ) : payments.length === 0 ? (
+          <div className="eia-empty eia-payment-link-empty" data-testid="link-payment-empty">
+            <p><b>No payments found for this policy.</b></p>
+            <p>
+              Payments are created and executed in the Payment workbench. Policy only links a
+              payment that already exists.
+            </p>
+            <CrossLink href="/payment">Open Payment workbench</CrossLink>
+          </div>
+        ) : (
+          <form onSubmit={applyPayment}>
+            <div className="eia-table-wrap">
+              <table className="eia-table eia-payment-table" aria-label="Policy payments">
+                <thead>
+                  <tr>
+                    <th>Select</th>
+                    <th>Payment</th>
+                    <th>Status</th>
+                    <th>Amount</th>
+                    <th>Created</th>
+                    <th>Payee</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payments.map((payment) => (
+                    <tr
+                      key={payment.id}
+                      className={selectedId === payment.id ? 'selected' : undefined}
+                      data-testid={`payment-row-${payment.id}`}
+                    >
+                      <td>
+                        <input
+                          type="radio"
+                          name="link-payment"
+                          value={payment.id}
+                          aria-label={`Select ${payment.paymentNumber}`}
+                          checked={selectedId === payment.id}
+                          onChange={() => selectPayment(payment.id)}
+                        />
+                      </td>
+                      <td><code className="eia-mono">{payment.paymentNumber}</code></td>
+                      <td>
+                        <span className={`eia-pill ${paymentStatusTone(payment.status)}`}>
+                          {payment.status || '—'}
+                        </span>
+                      </td>
+                      <td>
+                        {formatMoney(
+                          payment.amount,
+                          payment.currency || installmentCurrency
+                        )}
+                        {(payment.currency || installmentCurrency) ? (
+                          <span className="eia-muted">
+                            {' '}{payment.currency || installmentCurrency}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td>{payment.createdDate || '—'}</td>
+                      <td>{payment.payee || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {amountsDiffer && (
+              <p
+                className="eia-payment-warning"
+                role="note"
+                data-testid="payment-amount-warning"
+              >
+                <b>Amounts differ.</b> Selected payment {selected.paymentNumber} is{' '}
+                {formatMoney(selected.amount, selected.currency || installmentCurrency)}; installment{' '}
+                {installment.installmentNumber} is{' '}
+                {formatMoney(installment.amount, installmentCurrency)}. Applying links the payment
+                for reconciliation and marks the installment collected. The Payment record and its
+                amount are not changed.
+              </p>
+            )}
+
+            {applyError && (
+              <p
+                role="alert"
+                className="eia-modal-error"
+                data-testid="link-payment-apply-error"
+              >
+                {applyError}
+              </p>
+            )}
+
+            <div className="eia-modal-actions">
+              <button
+                type="submit"
+                data-testid="apply-payment"
+                disabled={!selected || applying}
+              >
+                {applying ? 'Applying…' : 'Apply payment'}
+              </button>
+              <button
+                type="button"
+                className="eia-btn-secondary"
+                onClick={onClose}
+                disabled={applying}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+
+        <section
+          className="eia-context-panel"
+          aria-label="Payment linking context"
+          data-testid="payment-link-context"
+        >
+          <h4>What linking does</h4>
+          <p>
+            <b>Marks the installment collected.</b> The installment records the payment id as
+            collection evidence. The Payment is not executed, approved, or altered by this action.
+          </p>
+          <p>
+            <b>Amounts may differ.</b> The installment keeps its scheduled amount and the Payment
+            keeps its own amount and currency; both are shown here for reconciliation.
+          </p>
+          <p>
+            <b>No payment is created.</b> A payment must already exist in the Payment workbench
+            before it can be linked.
+          </p>
+        </section>
+      </div>
+    </div>
   );
 }
 

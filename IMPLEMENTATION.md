@@ -44,7 +44,16 @@ empty state on 404; a plan is rendered as a summary (total premium, paid,
 outstanding, overdue) and an installment table. `POST /billing` sends
 `{installmentCount, frequency, firstDueDate}` with an `Idempotency-Key`;
 `PATCH /billing/installments/{id}` sends `{status}` (plus an existing
-`paymentId` when present). The `Create payment` action is a link that hands the
+`paymentId` when present). `DUE`/`OVERDUE` rows also offer `Link payment`, which
+reads `GET /api/v1/payments?sourceType=POLICY&sourceId=<policyId>` and lists the
+candidate payment number, status, amount/currency, created date, and payee. The
+modal owns its loading, empty, read-failure/retry, and apply-failure states. It
+warns when the selected payment amount differs from the installment, then
+`Apply payment` sends `{status: "PAID", paymentId}`. The PATCH
+marks the installment collected and stores the payment id; it never creates,
+executes, approves, or alters the Payment, whose amount is kept for
+reconciliation. The row shows the linked payment id and (from the selection) its
+payment number. The `Create payment` action remains a link that hands the
 installment to the Payment workbench through
 `?new=1&sourceType=POLICY&sourceId=…&sourceReference=<policyNumber> installment <n>&amount=…&currency=…&payeePartyId=…`.
 Policy never posts a payment, and the plan never changes coverage or the policy
@@ -68,7 +77,9 @@ version.
 
 `src/billing.js` holds the pure billing helpers: plan form defaults and payload,
 form validation, tolerant normalization of the billing read (plan, installments,
-summary), status/action rules, and the Payment hand-off URL. `src/renewal.js`
+summary), status/action rules, the Payment hand-off URL, the policy-payment
+source query, tolerant payment normalization, payment status tone, amount
+comparison for reconciliation, and the link payload. `src/renewal.js`
 holds the pure renewal helpers: status eligibility and context, UTC-safe date
 arithmetic, the term/premium form defaults, payload construction, and
 validation. `src/massTort.js` holds the profile's tort, trigger, and allocation
@@ -95,14 +106,16 @@ endorsement, the new version row, and the `428 APPROVAL_REQUIRED` problem;
 header, newest-first rendering, empty and 503-contained states, selection
 refetch, card refresh, and payload summaries; `tests/billing.spec.js` covers the
 plan payload, policy premium context, summary, mark paid/waive PATCH payloads,
-overdue rows, the Payment hand-off URL, read failures, and 409 conflicts;
-`tests/renewal.spec.js` covers action eligibility by status, modal term and
-premium/limit defaults, the renewal payload and headers, success selection and
-notice, the predecessor link and its navigation, and the 409 conflict;
-`tests/mass-tort.spec.js` covers the not-set empty state and setup form, the
-draft payload and header, complete validation (including a reversed coverage
-block), existing-value load and edit, the allocation/ownership context, a
-contained read failure with retry, a 400 problem inside the form, and the 409
+overdue rows, the Payment hand-off URL, read failures, 409 conflicts, the
+payment-picker query and tenant header, selection and apply payload, linked
+payment id/number, amount warning, empty state, picker read failure/retry, and a
+409 link conflict; `tests/renewal.spec.js` covers action eligibility by status,
+modal term and premium/limit defaults, the renewal payload and headers, success
+selection and notice, the predecessor link and its navigation, and the 409
+conflict; `tests/mass-tort.spec.js` covers the not-set empty state and setup
+form, the draft payload and header, complete validation (including a reversed
+coverage block), existing-value load and edit, the allocation/ownership context,
+a contained read failure with retry, a 400 problem inside the form, and the 409
 reload.
 
 ## Known SPEC gaps in this slice

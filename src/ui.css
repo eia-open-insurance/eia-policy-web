@@ -1093,3 +1093,24 @@ a.eia-btn-secondary.eia-billing-payment-link {
   .eia-modal .eia-form-grid .span-3 { grid-column: auto; }
   .eia-modal-actions { justify-content: flex-start; }
 }
+
+/* Policy program: an administrative grouping for capacity and aggregates. */
+.eia-program-empty { text-align: left; }
+.eia-program-lead-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--eia-ink);
+}
+.eia-program-lead-toggle input[type="checkbox"] {
+  width: 16px !important;
+  height: 16px !important;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 !important;
+  accent-color: var(--eia-blue);
+  cursor: pointer;
+}

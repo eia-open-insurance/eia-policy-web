@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ActivityTimeline, { activityEndpoint, sortActivityItems } from './ActivityTimeline.jsx';
 import EntityPicker from './EntityPicker.jsx';
+import ProgramPicker from './ProgramPicker.jsx';
 import {
   BILLING_FREQUENCIES,
   billingFrequencyLabel,
@@ -41,6 +42,23 @@ import {
 } from './massTort.js';
 import { partyEndpoint, partyRecordLabel } from './party.js';
 import {
+  MAX_PROGRAM_NAME_LENGTH,
+  PROGRAM_TYPES,
+  defaultProgramForm,
+  emptyProgramState,
+  normalizeProgram,
+  policyProgramEndpoint,
+  policyProgramId,
+  programAttachPayload,
+  programCreatePayload,
+  programDisplayLabel,
+  programEndpoint,
+  programLabel,
+  programStatusTone,
+  programTypeLabel,
+  validateProgramForm
+} from './programs.js';
+import {
   addYears,
   defaultRenewalForm,
   isRenewable,
@@ -65,6 +83,7 @@ const NEXT_STATUS = {
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'program', label: 'Program' },
   { id: 'versions', label: 'Versions' },
   { id: 'coverages', label: 'Coverages & Limits' },
   { id: 'massTort', label: 'Mass tort' },
@@ -294,6 +313,18 @@ export default function App() {
   const [massTortFormError, setMassTortFormError] = useState('');
   const [massTortNotice, setMassTortNotice] = useState('');
 
+  const [program, setProgram] = useState(emptyProgramState);
+  const programRequestRef = useRef(0);
+  const [programPick, setProgramPick] = useState(null);
+  const [programBusy, setProgramBusy] = useState('');
+  const [programAttachError, setProgramAttachError] = useState('');
+  const [programActionError, setProgramActionError] = useState('');
+  const [programCreateOpen, setProgramCreateOpen] = useState(false);
+  const [programForm, setProgramForm] = useState(() => defaultProgramForm(null));
+  const [programFormError, setProgramFormError] = useState('');
+  const [programSaving, setProgramSaving] = useState(false);
+  const [programLeadPolicy, setProgramLeadPolicy] = useState(null);
+
   const [coverageForm, setCoverageForm] = useState(() => defaultCoverageForm(null));
   const [erosionForm, setErosionForm] = useState({
     claimId: '', allocationId: '', sourceVersion: '1',
@@ -516,6 +547,7 @@ export default function App() {
       setLinkedPayments({});
       clearMassTort();
       setMassTortForm(defaultMassTortForm(null, detail.body));
+      clearProgram();
       if (!options.keepTab) {
         setCoverageForm(defaultCoverageForm(detail.body));
         setInsuredForm(defaultInsuredForm(detail.body));
@@ -727,6 +759,99 @@ export default function App() {
   }
 
   /**
+   * A policy belongs to at most one program. The tab reads the policy's current
+   * assignment, then the program catalog record, so a policy with no program is
+   * the tab's empty state rather than an unavailable tab. A missing policy
+   * read or program read stays inside the card and never blocks the record.
+   *
+   * `policy` may be passed when a command already returned the updated
+   * assignment; otherwise the policy is re-read so the tab never displays an
+   * association that was cleared or changed elsewhere.
+   */
+  async function loadProgram(policy = null, options = {}) {
+    const requestId = programRequestRef.current + 1;
+    programRequestRef.current = requestId;
+    const policyId = options.policyId || selected?.id;
+    if (!policyId) {
+      setProgram(emptyProgramState());
+      return null;
+    }
+    setProgram((current) => ({ ...current, loading: true, error: '' }));
+    try {
+      let record = policy;
+      if (!record) {
+        const detail = await api(`/api/v1/policies/${policyId}`);
+        if (programRequestRef.current !== requestId) return null;
+        if (!detail.response.ok) {
+          setProgram({
+            program: null,
+            loading: false,
+            error: 'Program assignment is temporarily unavailable.'
+          });
+          return null;
+        }
+        record = detail.body;
+      }
+      const programId = policyProgramId(record);
+      if (!programId) {
+        setProgram({ ...emptyProgramState(), loading: false });
+        return null;
+      }
+      const result = await api(programEndpoint(programId));
+      if (programRequestRef.current !== requestId) return null;
+      if (result.response.status === 404) {
+        setProgram({
+          program: null,
+          loading: false,
+          error: 'The assigned program could not be found.'
+        });
+        return null;
+      }
+      if (!result.response.ok) {
+        setProgram({
+          program: null,
+          loading: false,
+          error: 'Program is temporarily unavailable.'
+        });
+        return null;
+      }
+      const normalized = normalizeProgram(result.body);
+      if (!normalized) {
+        setProgram({
+          program: null,
+          loading: false,
+          error: 'The assigned program could not be read.'
+        });
+        return null;
+      }
+      setProgram({ program: normalized, loading: false, error: '' });
+      return normalized;
+    } catch {
+      if (programRequestRef.current !== requestId) return null;
+      setProgram({
+        program: null,
+        loading: false,
+        error: 'Program is temporarily unavailable.'
+      });
+      return null;
+    }
+  }
+
+  function clearProgram() {
+    programRequestRef.current += 1;
+    setProgram(emptyProgramState());
+    setProgramPick(null);
+    setProgramBusy('');
+    setProgramAttachError('');
+    setProgramActionError('');
+    setProgramCreateOpen(false);
+    setProgramForm(defaultProgramForm(null));
+    setProgramFormError('');
+    setProgramSaving(false);
+    setProgramLeadPolicy(null);
+  }
+
+  /**
    * The activity timeline is derived from the platform event stream, not from
    * the policy aggregate. It loads as soon as a record is selected, but remains
    * card-local: an unavailable event service never blocks the policy record.
@@ -780,6 +905,8 @@ export default function App() {
     try {
       if (tabId === 'overview') {
         await loadCurrentVersion(policyId);
+      } else if (tabId === 'program') {
+        await loadProgram(null, { policyId });
       } else if (tabId === 'versions') {
         const result = await api(`/api/v1/policies/${policyId}/versions?page=0&size=50`);
         if (!result.response.ok) setError(problemMessage(result.body, 'Version history failed'));
@@ -837,9 +964,11 @@ export default function App() {
   }
 
   async function refreshSelected(etag) {
-    if (!selected) return;
+    if (!selected) return null;
+    let refreshed = null;
     const detail = await api(`/api/v1/policies/${selected.id}`);
     if (detail.response.ok) {
+      refreshed = detail.body;
       setSelected({
         id: selected.id,
         policy: detail.body,
@@ -847,6 +976,7 @@ export default function App() {
       });
     }
     await load(page);
+    return refreshed;
   }
 
   function mutationSucceeded(message, result) {
@@ -875,6 +1005,7 @@ export default function App() {
     setLinkPaymentInstallment(null);
     setLinkedPayments({});
     clearMassTort();
+    clearProgram();
   }
 
   async function refreshWorkspace() {
@@ -1191,6 +1322,18 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [renewOpen, renewBusy]);
 
+  useEffect(() => {
+    if (!programCreateOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !programSaving) {
+        setProgramCreateOpen(false);
+        setProgramFormError('');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [programCreateOpen, programSaving]);
+
   // ---- billing plan -------------------------------------------------
   function updateBilling(field, value) {
     setBillingForm((current) => ({ ...current, [field]: value }));
@@ -1384,6 +1527,180 @@ export default function App() {
     }
   }
 
+  // ---- program assignment -------------------------------------------
+  function updateProgramForm(field, value) {
+    setProgramForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function openProgramCreate() {
+    if (!selected) return;
+    setProgramFormError('');
+    setProgramAttachError('');
+    setProgramActionError('');
+    setProgramForm(defaultProgramForm(selected.policy));
+    setProgramCreateOpen(true);
+  }
+
+  function closeProgramCreate() {
+    if (programSaving) return;
+    setProgramCreateOpen(false);
+    setProgramFormError('');
+  }
+
+  function selectProgramForAttach(programId, picked) {
+    setProgramAttachError('');
+    setProgramPick(picked || (programId ? { id: programId } : null));
+  }
+
+  /**
+   * Attaching records the association with PATCH /policies/{id}/program. The
+   * program itself is not edited and the policy keeps its coverage, limits,
+   * premium, and version; the policy is re-read afterwards so the record and
+   * the card agree on the new assignment.
+   */
+  async function attachProgram() {
+    if (!selected || programBusy) return;
+    const target = programPick;
+    if (!target?.id) {
+      setProgramAttachError('Select a program to attach.');
+      return;
+    }
+    setProgramAttachError('');
+    setProgramActionError('');
+    setProgramBusy('attach');
+    try {
+      const result = await api(policyProgramEndpoint(selected.id), {
+        method: 'PATCH',
+        body: programAttachPayload(target.id)
+      });
+      if (!result.response.ok) {
+        setProgramAttachError(
+          problemMessage(result.body, `Attach failed: ${result.response.status}`)
+        );
+        return;
+      }
+      setNotice(
+        `Attached program ${programLabel(target)} to `
+        + `${selected.policy?.policyNumber || 'the policy'}.`
+      );
+      setProgramPick(null);
+      const updated = await refreshSelected();
+      const record = updated && policyProgramId(updated)
+        ? updated
+        : { ...(updated || selected.policy), programId: target.id };
+      await loadProgram(record);
+    } catch (e) {
+      setProgramAttachError(e.message);
+    } finally {
+      setProgramBusy('');
+    }
+  }
+
+  /**
+   * Detaching clears only the association. An explicit null programId is sent
+   * so the command cannot be mistaken for an absent field.
+   */
+  async function detachProgram() {
+    if (!selected || programBusy) return;
+    const current = program.program;
+    setProgramAttachError('');
+    setProgramActionError('');
+    setProgramBusy('detach');
+    try {
+      const result = await api(policyProgramEndpoint(selected.id), {
+        method: 'PATCH',
+        body: programAttachPayload(null)
+      });
+      if (!result.response.ok) {
+        setProgramActionError(
+          problemMessage(result.body, `Detach failed: ${result.response.status}`)
+        );
+        return;
+      }
+      setNotice(`Detached program ${programLabel(current)}.`);
+      setProgramPick(null);
+      const updated = await refreshSelected();
+      const record = { ...(updated || selected.policy), programId: null, program: null };
+      await loadProgram(record);
+    } catch (e) {
+      setProgramActionError(e.message);
+    } finally {
+      setProgramBusy('');
+    }
+  }
+
+  /**
+   * Creating a program also attaches it to the policy it was created from, so
+   * the operator never has to repeat the attach step. If creation succeeds but
+   * the attach fails, the new program stays in the catalog and is preselected
+   * in the attach card for a retry.
+   */
+  async function submitProgramCreate(event) {
+    event.preventDefault();
+    if (!selected || programSaving) return;
+    setProgramFormError('');
+    const validation = validateProgramForm(programForm);
+    if (validation) {
+      setProgramFormError(validation);
+      return;
+    }
+    const payload = programCreatePayload(programForm, selected.policy);
+    setProgramSaving(true);
+    try {
+      const created = await api('/api/v1/programs', {
+        method: 'POST',
+        body: payload,
+        idempotencyKey: newIdempotencyKey()
+      });
+      if (!created.response.ok) {
+        setProgramFormError(
+          problemMessage(created.body, `Program creation failed: ${created.response.status}`)
+        );
+        return;
+      }
+      const createdProgram = normalizeProgram(created.body);
+      if (!createdProgram?.id) {
+        setProgramFormError(
+          'The program was created without an id in the response. Reload the tab and attach it from the program catalog.'
+        );
+        return;
+      }
+      const attach = await api(policyProgramEndpoint(selected.id), {
+        method: 'PATCH',
+        body: programAttachPayload(createdProgram.id)
+      });
+      if (!attach.response.ok) {
+        setProgramCreateOpen(false);
+        setProgramForm(defaultProgramForm(selected.policy));
+        setProgramPick(createdProgram);
+        setProgramAttachError(
+          `Created ${programLabel(createdProgram)} but attaching it to this policy failed: `
+          + `${problemMessage(attach.body, `status ${attach.response.status}`)} `
+          + 'Select it under Attach existing program to try again.'
+        );
+        setNotice(`Created program ${programLabel(createdProgram)}.`);
+        await loadProgram(null, { policyId: selected.id });
+        return;
+      }
+      setProgramCreateOpen(false);
+      setProgramForm(defaultProgramForm(selected.policy));
+      setProgramPick(null);
+      setNotice(
+        `Created program ${programLabel(createdProgram)} and attached it to `
+        + `${selected.policy?.policyNumber || 'the policy'}.`
+      );
+      const updated = await refreshSelected();
+      const record = updated && policyProgramId(updated)
+        ? updated
+        : { ...(updated || selected.policy), programId: createdProgram.id };
+      await loadProgram(record);
+    } catch (e) {
+      setProgramFormError(e.message);
+    } finally {
+      setProgramSaving(false);
+    }
+  }
+
   const selectedPolicy = selected?.policy;
   const advanceTarget = selectedPolicy ? nextStatusFor(selectedPolicy.status) : null;
   const renewalAllowed = selectedPolicy ? isRenewable(selectedPolicy.status) : false;
@@ -1399,6 +1716,13 @@ export default function App() {
     : '—';
   const massTortProfile = massTort.profile;
   const massTortComplete = isMassTortComplete(massTortProfile);
+  const currentProgram = program.program;
+  const programLeadPolicyId = currentProgram?.leadPolicyId || '';
+  const programLeadPolicyText = programLeadPolicyId
+    ? (programLeadPolicy?.id === programLeadPolicyId && programLeadPolicy.number
+      ? programLeadPolicy.number
+      : currentProgram?.leadPolicyNumber || shortId(programLeadPolicyId))
+    : '';
 
   /**
    * A renewal record knows its predecessor by id only. Resolve the policy
@@ -1432,6 +1756,44 @@ export default function App() {
       active = false;
     };
   }, [renewedFromPolicyId, policies]);
+
+  /**
+   * The program card links to the program's lead policy. The catalog may send
+   * the policy number with the program; otherwise resolve it from the queue or
+   * the detail read. The link target is the policy id either way.
+   */
+  useEffect(() => {
+    if (!programLeadPolicyId) {
+      setProgramLeadPolicy(null);
+      return undefined;
+    }
+    const knownNumber = currentProgram?.leadPolicyNumber || '';
+    if (knownNumber) {
+      setProgramLeadPolicy({ id: programLeadPolicyId, number: knownNumber });
+      return undefined;
+    }
+    const queued = policies.find((policy) => policy.id === programLeadPolicyId);
+    if (queued?.policyNumber) {
+      setProgramLeadPolicy({ id: programLeadPolicyId, number: queued.policyNumber });
+      return undefined;
+    }
+    let active = true;
+    setProgramLeadPolicy({ id: programLeadPolicyId, number: '' });
+    api(`/api/v1/policies/${programLeadPolicyId}`)
+      .then(({ response, body }) => {
+        if (!active) return;
+        setProgramLeadPolicy({
+          id: programLeadPolicyId,
+          number: response.ok && body?.policyNumber ? body.policyNumber : ''
+        });
+      })
+      .catch(() => {
+        if (active) setProgramLeadPolicy({ id: programLeadPolicyId, number: '' });
+      });
+    return () => {
+      active = false;
+    };
+  }, [programLeadPolicyId, currentProgram?.leadPolicyNumber, policies]);
 
   const normalizedQueueFilter = queueFilter.trim().toLowerCase();
   const filterActive = normalizedQueueFilter.length > 0;
@@ -1824,7 +2186,7 @@ export default function App() {
                 ))}
               </nav>
 
-              {tabLoading && tab !== 'billing' && tab !== 'massTort' && (
+              {tabLoading && tab !== 'billing' && tab !== 'massTort' && tab !== 'program' && (
                 <p className="eia-muted">Loading…</p>
               )}
 
@@ -2021,6 +2383,213 @@ export default function App() {
                       </div>
                     )}
                   </section>
+                </section>
+              )}
+
+              {tab === 'program' && (
+                <section
+                  id="panel-program"
+                  role="tabpanel"
+                  aria-labelledby="tab-program"
+                >
+                  <div className="eia-section-title">
+                    <h2>Program</h2>
+                    <span className="eia-muted">
+                      Capacity and aggregate administration · Direct book
+                    </span>
+                  </div>
+                  <div className="eia-toolbar" style={{ marginBottom: 12 }}>
+                    <span className="eia-muted">
+                      One program per policy · assigning does not change coverage or limits
+                    </span>
+                    <span className="spacer" />
+                    <button type="button" data-testid="create-program" onClick={openProgramCreate}>
+                      Create program
+                    </button>
+                  </div>
+
+                  {program.loading && !currentProgram ? (
+                    <p className="eia-muted" data-testid="program-loading">
+                      Loading program…
+                    </p>
+                  ) : program.error ? (
+                    <section
+                      className="eia-card"
+                      aria-label="Program unavailable"
+                      data-testid="program-error"
+                    >
+                      <p role="alert" style={{ marginTop: 0 }}>{program.error}</p>
+                      <button
+                        type="button"
+                        className="eia-btn-secondary"
+                        onClick={() => loadProgram()}
+                      >
+                        Retry
+                      </button>
+                    </section>
+                  ) : !currentProgram ? (
+                    <>
+                      <section
+                        className="eia-card eia-program-empty"
+                        aria-label="No program assigned"
+                        data-testid="program-empty"
+                      >
+                        <h3 style={{ marginTop: 0 }}>No program assigned</h3>
+                        <p className="eia-billing-copy">
+                          This policy is not assigned to a program. A program groups related
+                          policies for capacity and aggregate administration, so a block of
+                          policies can be reviewed and managed together.
+                        </p>
+                        <p className="eia-billing-copy">
+                          Attach an existing program below, or create a program to group this
+                          policy with its related policies. Assigning a program is
+                          administrative: coverage, limits, premium, and the policy version
+                          stay unchanged.
+                        </p>
+                      </section>
+
+                      <section
+                        className="eia-card"
+                        aria-label="Attach existing program"
+                        data-testid="program-attach"
+                        style={{ marginTop: 16 }}
+                      >
+                        <div className="eia-section-title" style={{ marginTop: 0 }}>
+                          <h2>Attach existing program</h2>
+                          <span className="eia-muted">Reads the program catalog</span>
+                        </div>
+                        <p className="eia-billing-copy">
+                          Search by program number or name. Attaching records the association
+                          on this policy; the program keeps its own effective dates, status,
+                          and lead policy.
+                        </p>
+                        <div className="eia-form-grid">
+                          <div className="eia-field span-2">
+                            <label htmlFor="program-attach-picker">Program</label>
+                            <ProgramPicker
+                              value={programPick?.id || ''}
+                              valueLabel={programPick ? programDisplayLabel(programPick) : ''}
+                              onChange={selectProgramForAttach}
+                              disabled={Boolean(programBusy)}
+                            />
+                          </div>
+                          <div className="eia-field">
+                            <button
+                              type="button"
+                              data-testid="attach-program"
+                              onClick={attachProgram}
+                              disabled={Boolean(programBusy) || !programPick?.id}
+                            >
+                              {programBusy === 'attach' ? 'Attaching…' : 'Attach program'}
+                            </button>
+                          </div>
+                        </div>
+                        {programPick && (
+                          <p
+                            className="eia-muted"
+                            style={{ margin: '8px 0 0' }}
+                            data-testid="program-attach-selection"
+                          >
+                            Selected {programDisplayLabel(programPick)}
+                            {programPick.type ? ` · ${programTypeLabel(programPick.type)}` : ''}
+                            {programPick.status ? ` · ${programPick.status}` : ''}
+                          </p>
+                        )}
+                        {programAttachError && (
+                          <p
+                            role="alert"
+                            data-testid="program-attach-error"
+                            style={{ margin: '10px 0 0' }}
+                          >
+                            {programAttachError}
+                          </p>
+                        )}
+                      </section>
+                    </>
+                  ) : (
+                    <section
+                      className="eia-card"
+                      aria-label="Current program"
+                      data-testid="program-current"
+                    >
+                      <div className="eia-section-title" style={{ marginTop: 0 }}>
+                        <h2>Current program</h2>
+                        <span
+                          className={`eia-pill ${programStatusTone(currentProgram.status)}`}
+                          data-testid="program-status"
+                        >
+                          {currentProgram.status || '—'}
+                        </span>
+                      </div>
+                      <dl className="eia-kv" style={{ marginTop: 10 }}>
+                        <dt>Program number</dt>
+                        <dd className="eia-mono" data-testid="program-value-number">
+                          {currentProgram.number || '—'}
+                        </dd>
+                        <dt>Name</dt>
+                        <dd data-testid="program-value-name">{currentProgram.name || '—'}</dd>
+                        <dt>Type</dt>
+                        <dd data-testid="program-value-type">
+                          {programTypeLabel(currentProgram.type)}
+                        </dd>
+                        <dt>Effective from</dt>
+                        <dd data-testid="program-value-effective-from">
+                          {currentProgram.effectiveFrom || '—'}
+                        </dd>
+                        <dt>Effective to</dt>
+                        <dd data-testid="program-value-effective-to">
+                          {currentProgram.effectiveTo || '—'}
+                        </dd>
+                        <dt>Status</dt>
+                        <dd data-testid="program-value-status">
+                          {currentProgram.status || '—'}
+                        </dd>
+                        <dt>Lead policy</dt>
+                        <dd data-testid="program-value-lead-policy">
+                          {programLeadPolicyId ? (
+                            <CrossLink
+                              href={`/policy?record=${programLeadPolicyId}`}
+                              data-testid="program-lead-policy-link"
+                              title={`Open lead policy ${programLeadPolicyId}`}
+                            >
+                              {programLeadPolicyText}
+                            </CrossLink>
+                          ) : '—'}
+                        </dd>
+                      </dl>
+
+                      {programActionError && (
+                        <p
+                          role="alert"
+                          data-testid="program-action-error"
+                          style={{ margin: '12px 0 0' }}
+                        >
+                          {programActionError}
+                        </p>
+                      )}
+
+                      <div
+                        className="eia-actions"
+                        style={{ marginTop: 14, justifyContent: 'flex-start' }}
+                      >
+                        <button
+                          type="button"
+                          className="eia-btn-secondary"
+                          data-testid="detach-program"
+                          onClick={detachProgram}
+                          disabled={Boolean(programBusy)}
+                        >
+                          {programBusy === 'detach' ? 'Detaching…' : 'Detach program'}
+                        </button>
+                      </div>
+                      <p className="eia-muted" style={{ margin: '8px 0 0' }}>
+                        Detaching removes only the program association. Coverage, limits,
+                        premium, and the policy version stay unchanged.
+                      </p>
+                    </section>
+                  )}
+
+                  <ProgramContextPanel />
                 </section>
               )}
 
@@ -3733,6 +4302,114 @@ export default function App() {
           </div>
         </div>
       )}
+      {programCreateOpen && selectedPolicy && (
+        <div className="eia-modal-backdrop">
+          <div
+            className="eia-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="program-dialog-title"
+            aria-describedby="program-dialog-description"
+            data-testid="program-dialog"
+          >
+            <div className="eia-section-title" style={{ marginTop: 0 }}>
+              <h2 id="program-dialog-title">Create program</h2>
+              <span className="eia-badge">{selectedPolicy.policyNumber}</span>
+            </div>
+            <p className="eia-modal-lede" id="program-dialog-description">
+              The new program is added to the program catalog and attached to this policy when
+              it is created.
+              {currentProgram ? ' The current program assignment is replaced.' : ''}
+            </p>
+            <p className="eia-muted eia-modal-currency-context">
+              Policy term {selectedPolicy.effectiveDate || '—'} –{' '}
+              {selectedPolicy.expirationDate || '—'} · default program dates
+            </p>
+
+            {programFormError && (
+              <p role="alert" className="eia-modal-error" data-testid="program-form-error">
+                {programFormError}
+              </p>
+            )}
+
+            <form className="eia-form-grid" onSubmit={submitProgramCreate}>
+              <div className="eia-field span-2">
+                <label htmlFor="program-name">Program name</label>
+                <input
+                  id="program-name"
+                  value={programForm.name}
+                  maxLength={MAX_PROGRAM_NAME_LENGTH}
+                  onChange={(e) => updateProgramForm('name', e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="eia-field">
+                <label htmlFor="program-type">Program type</label>
+                <select
+                  id="program-type"
+                  value={programForm.programType}
+                  onChange={(e) => updateProgramForm('programType', e.target.value)}
+                >
+                  <option value="">Select a program type</option>
+                  {PROGRAM_TYPES.map((entry) => (
+                    <option key={entry.value} value={entry.value}>{entry.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="eia-field">
+                <label htmlFor="program-effective-from">Effective from</label>
+                <input
+                  id="program-effective-from"
+                  type="date"
+                  value={programForm.effectiveFrom}
+                  onChange={(e) => updateProgramForm('effectiveFrom', e.target.value)}
+                />
+              </div>
+              <div className="eia-field">
+                <label htmlFor="program-effective-to">Effective to</label>
+                <input
+                  id="program-effective-to"
+                  type="date"
+                  min={programForm.effectiveFrom || undefined}
+                  value={programForm.effectiveTo}
+                  onChange={(e) => updateProgramForm('effectiveTo', e.target.value)}
+                />
+                <span className="eia-field-hint">
+                  Optional. End dates may be left open for a program that continues.
+                </span>
+              </div>
+              <div className="eia-field span-3">
+                <label className="eia-program-lead-toggle" htmlFor="program-lead-policy">
+                  <input
+                    id="program-lead-policy"
+                    type="checkbox"
+                    checked={programForm.leadPolicy !== false}
+                    onChange={(e) => updateProgramForm('leadPolicy', e.target.checked)}
+                  />
+                  Use {selectedPolicy.policyNumber} as the program&apos;s lead policy
+                </label>
+                <span className="eia-field-hint">
+                  Optional. The lead policy is the reference policy for the program; clear this
+                  to create the program without one.
+                </span>
+              </div>
+              <div className="eia-field span-3 eia-modal-actions">
+                <button type="submit" data-testid="submit-program" disabled={programSaving}>
+                  {programSaving ? 'Creating program…' : 'Create and attach program'}
+                </button>
+                <button
+                  type="button"
+                  className="eia-btn-secondary"
+                  onClick={closeProgramCreate}
+                  disabled={programSaving}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
       {linkPaymentInstallment && selectedPolicy && (
         <LinkPaymentDialog
           policyId={selectedPolicy.id}
@@ -4122,6 +4799,39 @@ function LinkPaymentDialog({ policyId, installment, currency, onClose, onLinked 
         </section>
       </div>
     </div>
+  );
+}
+
+/**
+ * The program association is administrative context on the policy. A program
+ * groups related policies for capacity and aggregate administration; it does
+ * not create capacity, coinsurance, or fronting records, and assigning or
+ * detaching a program never edits coverage, limits, premium, or the version.
+ */
+function ProgramContextPanel() {
+  return (
+    <section
+      className="eia-context-panel"
+      aria-label="Program context"
+      data-testid="program-context"
+    >
+      <h4>Program context</h4>
+      <p>
+        <b>A program groups related policies for capacity and aggregate administration.</b>{' '}
+        Policies placed under one program are reviewed and managed as a block, and the program
+        records its own type, effective dates, status, and lead policy.
+      </p>
+      <p>
+        <b>Assigning a program does not change coverage or limits.</b> The association is
+        administrative: coverage grants, limits, premium, and the policy version stay on the
+        policy record.
+      </p>
+      <p>
+        <b>Capacity, coinsurance, and fronting stay separate.</b> The program is the grouping
+        dimension; capacity shares, coinsurance, and fronting arrangements are recorded on their
+        own policy structures and are not created or edited here.
+      </p>
+    </section>
   );
 }
 

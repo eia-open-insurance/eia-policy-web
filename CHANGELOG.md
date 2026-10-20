@@ -91,6 +91,24 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
 - Playwright coverage for the mass tort empty state, draft payload, complete
   validation, existing-value load/edit, context boundary, read failure, 400
   problem, and 409 reload.
+- Program tab after Overview with a no-program empty state, the current
+  program's number, name, type, effective dates, status, and lead-policy link,
+  and a `Detach program` action.
+- Attach existing program typeahead over `GET /api/v1/programs` with an
+  `Attach program` action that sends
+  `PATCH /api/v1/policies/{policyId}/program` with `{programId}`; detaching
+  sends the same command with `programId: null`.
+- Create program modal (name, type, effective dates, optional lead policy that
+  defaults to the current policy) that posts `POST /api/v1/programs` and then
+  attaches the new program to the current policy. A create/attach split failure
+  keeps the created program selectable in the attach card.
+- Program context panel stating that a program groups related policies for
+  capacity and aggregate administration and that assigning one does not change
+  coverage or limits.
+- Playwright coverage for the tab position and empty state, catalog attach with
+  the lead-policy link, detach payload, create defaults/lead policy, create
+  validation, attach rejection and retry, and a contained program read failure
+  with retry.
 
 ### Changed
 

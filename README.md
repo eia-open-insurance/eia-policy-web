@@ -11,7 +11,7 @@
 
 ## Purpose
 
-Policy federated remote: screens, widgets, record tabs, and transaction composition. Direct policy lifecycle, coverage, limits, mass tort profiles, billing, underwriting, rating, and capacity.
+Policy federated remote: screens, widgets, record tabs, and transaction composition. Direct policy lifecycle, coverage, limits, mass tort profiles, programs, billing, underwriting, rating, and capacity.
 
 ## Implemented slice
 
@@ -28,6 +28,16 @@ Opening a policy shows a record detail with tabs:
 
 - **Overview** — policy terms, ETag, and the derived current version with its
   hash-verified flag.
+- **Program** — the policy's administrative program assignment. The current
+  assignment is read from the policy record and the program card shows its
+  number, name, type, effective dates, status, and a link to the lead policy.
+  With no program, the tab explains the grouping, offers a typeahead over
+  `GET /api/v1/programs`, and attaches an existing program through
+  `PATCH /api/v1/policies/{policyId}/program`. `Create program` posts a new
+  catalog record (name, type, effective dates, optional lead policy defaulting
+  to the current policy) to `POST /api/v1/programs` and attaches it to the
+  policy; `Detach program` clears the association. Assigning a program is
+  administrative and does not change coverage or limits.
 - **Versions** — immutable version history, change type, effective window, and
   premium delta.
 - **Coverages & Limits** — coverage grants with per-occurrence, aggregate,
@@ -105,7 +115,7 @@ npm run build
 npm test
 ```
 
-`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/mass-tort.spec.js` covers the profile empty state, draft save, complete validation, existing-value load and edit, context boundary, read failure, 400 problem, and 409 reload, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, linking an existing policy payment (fetch, selection/apply payload, amount warning, empty, read failure, and 409), the Payment hand-off URL, and 409 conflicts, and `tests/renewal.spec.js` covers the action's status eligibility, modal term/premium defaults, renewal payload and headers, success selection/notice, the predecessor link, and the 409 conflict. `@swc/core` is pinned to `1.10.7`.
+`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/program.spec.js` covers the Program tab position and empty state, attaching a catalog program with the lead-policy link, the detach payload, create defaults with the current policy as lead, creating without a lead policy, create validation/rejection, attach rejection and retry, and a contained program read failure with retry. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/mass-tort.spec.js` covers the profile empty state, draft save, complete validation, existing-value load and edit, context boundary, read failure, 400 problem, and 409 reload, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, linking an existing policy payment (fetch, selection/apply payload, amount warning, empty, read failure, and 409), the Payment hand-off URL, and 409 conflicts, and `tests/renewal.spec.js` covers the action's status eligibility, modal term/premium defaults, renewal payload and headers, success selection/notice, the predecessor link, and the 409 conflict. `@swc/core` is pinned to `1.10.7`.
 
 ## Responsibilities
 

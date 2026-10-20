@@ -4,9 +4,26 @@
 
 The Policy remote renders the policy workbench: a paginated policy list, DRAFT
 creation with idempotency, lifecycle advance with ETag/If-Match, and a record
-detail with tabs for versions, coverages and limits, mass tort, endorsements,
-insureds and locations, billing, cancellation/reinstatement, and an
-event-derived activity timeline.
+detail with tabs for programs, versions, coverages and limits, mass tort,
+endorsements, insureds and locations, billing, cancellation/reinstatement, and
+an event-derived activity timeline.
+
+The Program tab sits after Overview. The current assignment is read from the
+policy record's `programId`, then `GET /api/v1/programs/{programId}` fills the
+card with the program number, name, type, effective dates, status, and lead
+policy. A policy with no assignment is the tab's empty state, not an error. The
+typeahead reads `GET /api/v1/programs?q=…`, and `Attach program` sends
+`PATCH /api/v1/policies/{policyId}/program` with `{programId}`; `Detach program`
+sends the same command with `programId: null`. `Create program` posts
+`{name, programType, effectiveFrom, effectiveTo, leadPolicyId?}` to
+`POST /api/v1/programs` with an `Idempotency-Key` and then attaches the returned
+program id to the current policy. The lead policy is optional and defaults to
+the current policy. If creation succeeds but the attach is rejected, the modal
+closes, the created program stays selected in the attach card, and both outcomes
+are reported so the operator can retry. Program reads are contained in the tab
+with a Retry action. The context panel states that a program groups related
+policies for capacity and aggregate administration and that assigning one does
+not change coverage, limits, premium, or the policy version.
 
 The Mass tort tab sits after Coverage & Limits and administers the policy-owned
 mass tort profile. `GET /mass-tort-profile` is read lazily on tab selection; a
@@ -85,6 +102,11 @@ arithmetic, the term/premium form defaults, payload construction, and
 validation. `src/massTort.js` holds the profile's tort, trigger, and allocation
 catalogs (with allocation explanations), form defaults and validation, the PUT
 payload, status helpers, and tolerant normalization of the profile read.
+`src/programs.js` holds the program catalog types, endpoints, create and attach
+payloads, form defaults and validation, status/type/label helpers, and tolerant
+normalization of the program read and list. `src/ProgramPicker.jsx` is the
+debounced, abortable program typeahead; it only selects an existing program and
+never mutates the policy.
 
 No business rule is duplicated in the remote; canonical problems from the domain
 are rendered with their field errors.
@@ -116,7 +138,12 @@ conflict; `tests/mass-tort.spec.js` covers the not-set empty state and setup
 form, the draft payload and header, complete validation (including a reversed
 coverage block), existing-value load and edit, the allocation/ownership context,
 a contained read failure with retry, a 400 problem inside the form, and the 409
-reload.
+reload; `tests/program.spec.js` covers the tab position and no-program empty
+state, attaching a catalog program with the lead-policy link and PATCH payload,
+detaching with `programId: null`, create defaults with the current policy as
+lead, creating without a lead policy, create validation and a catalog rejection
+inside the open dialog, attach rejection/retry, and a contained program read
+failure with retry.
 
 ## Known SPEC gaps in this slice
 
@@ -133,6 +160,14 @@ reload.
 - The Billing tab covers the premium installment plan only; billing accounts,
   receivables, dunning, credit notes, commission statements, and disputes are
   not rendered.
+- The Program tab consumes `GET`/`POST /api/v1/programs`,
+  `GET /api/v1/programs/{programId}`, and
+  `PATCH /api/v1/policies/{policyId}/program`; the current assignment is read
+  from the policy record's `programId` (a nested program object is tolerated).
+  The Policy contract does not publish these operations yet, so the read/write
+  shapes are normalized defensively (`programNumber`/`code`, `programType`/
+  `type`, `leadPolicyId`/`leadPolicyNumber`). Program versions, capacity
+  shares, coinsurance, fronting, captives, and pools are not rendered.
 - No optimistic UI or offline queue; every mutation waits for the domain.
 - The remote does not read the field-usage manifest or the theme/UI-kit packages
   from `eia-frontend`.

@@ -125,11 +125,11 @@ test('issues an endorsement with If-Match and Idempotency-Key and shows the new 
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open POL-2026-0000001' }).click();
+  await page.getByRole('button', { name: 'Open record POL-2026-0000001' }).click();
   await page.getByRole('tab', { name: 'Endorsements' }).click();
   await expect(page.getByText('No endorsements yet.')).toBeVisible();
 
-  const form = page.getByRole('region', { name: 'Endorsements' });
+  const form = page.getByRole('tabpanel', { name: 'Endorsements' });
   await form.getByLabel('Type').selectOption('LIMIT');
   await form.getByLabel('Effective date').fill('2026-06-01');
   await form.getByLabel('Description').fill('Increase the general aggregate to 5,000,000');
@@ -206,9 +206,9 @@ test('renders the 428 approval problem for a backdated endorsement', async ({ pa
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open POL-2026-0000001' }).click();
+  await page.getByRole('button', { name: 'Open record POL-2026-0000001' }).click();
   await page.getByRole('tab', { name: 'Endorsements' }).click();
-  const form = page.getByRole('region', { name: 'Endorsements' });
+  const form = page.getByRole('tabpanel', { name: 'Endorsements' });
   await form.getByLabel('Effective date').fill('2025-12-01');
   await form.getByLabel('Backdate reason (required before inception)').fill('Retroactive binder');
   await page.getByRole('button', { name: 'Add endorsement' }).click();

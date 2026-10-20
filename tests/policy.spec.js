@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 
 const TENANT = '11111111-1111-7111-8111-111111111111';
 const API = '**/api/v1/policies**';
+const VERSION_ID = '44444444-4444-7444-8444-444444444444';
 
 function existingPolicy(overrides = {}) {
   return {
@@ -20,6 +21,21 @@ function existingPolicy(overrides = {}) {
     version: 0,
     createdAt: '2026-10-19T12:00:00Z',
     updatedAt: '2026-10-19T12:00:00Z',
+    ...overrides
+  };
+}
+
+function versionEnvelope(overrides = {}) {
+  return {
+    version: {
+      id: VERSION_ID,
+      policyVersionNumber: 'POL-2026-0000001-01',
+      changeType: 'ISSUE',
+      status: 'ISSUED',
+      effectiveFrom: '2026-01-01'
+    },
+    current: true,
+    hashVerified: true,
     ...overrides
   };
 }
@@ -46,7 +62,7 @@ async function json(route, status, body, headers = {}) {
   });
 }
 
-test('renders the page envelope and creates a policy with an Idempotency-Key', async ({ page }) => {
+test('renders the operational record layout and creates a policy with an Idempotency-Key', async ({ page }) => {
   const existing = existingPolicy();
   let policies = [existing];
   let idempotencyKey = null;
@@ -56,6 +72,14 @@ test('renders the page envelope and creates a policy with an Idempotency-Key', a
     const method = route.request().method();
     if (method === 'GET' && url.pathname === '/api/v1/policies') {
       await json(route, 200, envelope(policies, 0, policies.length));
+      return;
+    }
+    if (method === 'GET' && url.pathname === `/api/v1/policies/${existing.id}`) {
+      await json(route, 200, existing, { ETag: `"${existing.version}"` });
+      return;
+    }
+    if (method === 'GET' && url.pathname === `/api/v1/policies/${existing.id}/versions/current`) {
+      await json(route, 200, versionEnvelope());
       return;
     }
     if (method === 'POST' && url.pathname === '/api/v1/policies') {
@@ -78,14 +102,38 @@ test('renders the page envelope and creates a policy with an Idempotency-Key', a
   await page.goto('/');
 
   await expect(page.getByRole('heading', { name: 'Policy', exact: true })).toBeVisible();
-  await expect(page.getByText('POL-2026-0000001')).toBeVisible();
+  await expect(page.getByText('Policy · Direct book')).toBeVisible();
+  await expect(page.getByText('Direct policies, versions, coverages and limits')).toBeVisible();
+  await expect(page.locator('.eia-record-layout')).toBeVisible();
+  await expect(page.locator('.eia-record-list')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open record POL-2026-0000001' })).toBeVisible();
   await expect(page.getByText('Page 1 · 1 policy')).toBeVisible();
-  await expect(page.getByRole('cell', { name: '"0"' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Open record POL-2026-0000001' }).click();
+  await expect(page.getByRole('heading', { name: 'POL-2026-0000001' })).toBeVisible();
+  await expect(page.locator('.eia-record-panel')).toBeVisible();
+  await expect(page.getByTestId('policy-status')).toHaveText('DRAFT');
+  await expect(page.getByTestId('policy-etag')).toHaveText('"0"');
+
+  const summaryValues = page.locator('.eia-summary-grid .value');
+  await expect(summaryValues).toHaveCount(4);
+  await expect(summaryValues.nth(0)).toHaveText('$125,000.00');
+  await expect(summaryValues.nth(1)).toHaveText('$2,000,000.00');
+  await expect(summaryValues.nth(2)).toHaveText('2026-01-01');
+  await expect(summaryValues.nth(3)).toHaveText('2027-01-01');
+
+  await expect(page.getByRole('tab')).toHaveCount(6);
+  await expect(page.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tab', { name: 'Coverages & Limits' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Insureds & Locations' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'New policy' }).click();
+  await expect(page.getByRole('region', { name: 'Create policy' })).toBeVisible();
 
   await page.getByPlaceholder('Insured party ID (UUID)').fill('bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb');
   await page.getByRole('button', { name: 'Create policy' }).click();
 
-  await expect(page.getByRole('cell', { name: 'POL-2026-0000002', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open record POL-2026-0000002' })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
   await expect(page.getByRole('status')).toContainText('Created POL-2026-0000002');
   expect(idempotencyKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
@@ -119,16 +167,16 @@ test('follows next and previous links from the page envelope', async ({ page }) 
   });
 
   await page.goto('/');
-  await expect(page.getByText('POL-2026-0000001')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open record POL-2026-0000001' })).toBeVisible();
   await expect(page.getByText('Page 1 · 2 policies')).toBeVisible();
 
   await page.getByRole('button', { name: 'Next' }).click();
-  await expect(page.getByRole('cell', { name: 'POL-2026-0000002', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open record POL-2026-0000002' })).toBeVisible();
   await expect(page.getByText('Page 2 · 2 policies')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Previous' })).toBeEnabled();
 
   await page.getByRole('button', { name: 'Previous' }).click();
-  await expect(page.getByText('POL-2026-0000001')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open record POL-2026-0000001' })).toBeVisible();
   expect(requestedPages).toEqual(['0', '1', '0']);
 });
 
@@ -169,6 +217,7 @@ test('renders a canonical problem+json create failure', async ({ page }) => {
   });
 
   await page.goto('/');
+  await page.getByRole('button', { name: 'New policy' }).click();
   await page.getByPlaceholder('Insured party ID (UUID)').fill('bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb');
   await page.getByRole('button', { name: 'Create policy' }).click();
 
@@ -195,6 +244,10 @@ test('advances status with the detail ETag as If-Match', async ({ page }) => {
       await json(route, 200, current, { ETag: `"${current.version}"` });
       return;
     }
+    if (method === 'GET' && url.pathname === `${detailPath}/versions/current`) {
+      await json(route, 200, versionEnvelope());
+      return;
+    }
     if (method === 'PATCH' && url.pathname === `${detailPath}/status`) {
       patchHeaders = route.request().headers();
       patchBody = route.request().postDataJSON();
@@ -206,13 +259,14 @@ test('advances status with the detail ETag as If-Match', async ({ page }) => {
   });
 
   await page.goto('/');
+  await page.getByRole('button', { name: 'Open record POL-2026-0000001' }).click();
+  await expect(page.getByTestId('policy-etag')).toHaveText('"0"');
   await page.getByRole('button', { name: /advance to QUOTED/i }).click();
 
   await expect(page.getByRole('status')).toContainText('advanced to QUOTED');
-  await expect(page.getByRole('cell', { name: 'QUOTED' })).toBeVisible();
-  await expect(page.getByRole('cell', { name: '"1"' })).toBeVisible();
+  await expect(page.getByTestId('policy-status')).toHaveText('QUOTED');
+  await expect(page.getByTestId('policy-etag')).toHaveText('"1"');
 
   expect(patchHeaders['if-match']).toBe('"0"');
   expect(patchBody).toEqual({ status: 'QUOTED', expectedVersion: 0 });
 });
-

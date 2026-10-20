@@ -171,7 +171,7 @@ test('adds a coverage with limits and applies aggregate erosion', async ({ page 
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open POL-2026-0000001' }).click();
+  await page.getByRole('button', { name: 'Open record POL-2026-0000001' }).click();
   await expect(page.getByRole('heading', { name: 'POL-2026-0000001' })).toBeVisible();
   await page.getByRole('tab', { name: 'Coverages & Limits' }).click();
 
@@ -266,7 +266,7 @@ test('renders a canonical problem when a coverage violates a limit rule', async 
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open POL-2026-0000001' }).click();
+  await page.getByRole('button', { name: 'Open record POL-2026-0000001' }).click();
   await page.getByRole('tab', { name: 'Coverages & Limits' }).click();
   await page.getByLabel('Per occurrence').fill('9000000.00');
   await page.getByRole('button', { name: 'Add coverage' }).click();

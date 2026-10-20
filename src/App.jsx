@@ -46,8 +46,9 @@ function initialForm() {
 }
 
 function formatMoney(amount, currency) {
+  if (amount === null || amount === undefined || amount === '') return '—';
   const value = Number(amount);
-  if (!Number.isFinite(value) || !currency) return amount;
+  if (!Number.isFinite(value) || !currency) return String(amount);
   try {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(value);
   } catch {
@@ -56,8 +57,9 @@ function formatMoney(amount, currency) {
 }
 
 function formatPercent(value) {
+  if (value === null || value === undefined || value === '') return '—';
   const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return value ?? '—';
+  if (!Number.isFinite(numeric)) return String(value);
   return `${(numeric * 100).toFixed(2)}%`;
 }
 
@@ -67,6 +69,23 @@ function formatEtag(version) {
 
 function nextStatusFor(status) {
   return NEXT_STATUS[status] || null;
+}
+
+function shortId(value) {
+  if (!value) return '—';
+  const text = String(value);
+  return text.length > 8 ? `${text.slice(0, 8)}…` : text;
+}
+
+function insuredLabel(policy) {
+  return policy?.insuredDisplayName || shortId(policy?.insuredPartyId);
+}
+
+function statusTone(status) {
+  if (['IN_FORCE', 'ISSUED', 'REINSTATED', 'RENEWED'].includes(status)) return 'green';
+  if (['CANCELLED', 'VOID', 'NON_RENEWED'].includes(status)) return 'red';
+  if (['DRAFT', 'BOUND', 'EXPIRED'].includes(status)) return 'amber';
+  return 'blue';
 }
 
 function readJson(response) {
@@ -126,6 +145,7 @@ export default function App() {
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
   const [links, setLinks] = useState({});
+  const [showCreate, setShowCreate] = useState(false);
 
   const [selected, setSelected] = useState(null);
   const [tab, setTab] = useState('overview');
@@ -138,6 +158,17 @@ export default function App() {
   const [locations, setLocations] = useState([]);
   const [cancellations, setCancellations] = useState([]);
   const [reinstatements, setReinstatements] = useState([]);
+
+  const [coverageForm, setCoverageForm] = useState(() => defaultCoverageForm(null));
+  const [erosionForm, setErosionForm] = useState({
+    claimId: '', allocationId: '', sourceVersion: '1',
+    paidAmount: '250000.00', reservedAmount: '50000.00', recoveredAmount: '0.00'
+  });
+  const [endorsementForm, setEndorsementForm] = useState(defaultEndorsementForm);
+  const [insuredForm, setInsuredForm] = useState(() => defaultInsuredForm(null));
+  const [locationForm, setLocationForm] = useState(() => defaultLocationForm(null));
+  const [cancelForm, setCancelForm] = useState(defaultCancelForm);
+  const [reinstateForm, setReinstateForm] = useState(defaultReinstateForm);
 
   async function load(pageToLoad = 0) {
     setLoading(true);
@@ -191,6 +222,7 @@ export default function App() {
         ? `Idempotent replay: returned ${body?.policyNumber || 'the original policy'}.`
         : `Created ${body?.policyNumber || 'policy'}.`);
       setForm((current) => ({ ...current, policyNumber: '' }));
+      setShowCreate(false);
       await load(0);
     } catch (e) {
       setError(e.message);
@@ -234,6 +266,9 @@ export default function App() {
       await load(page);
       if (selected?.id === policy.id) {
         await openPolicy(policy.id, { keepTab: true, silent: true });
+        if (tab !== 'overview') {
+          await loadTabData(tab, policy.id);
+        }
       }
     } catch (e) {
       setError(e.message);
@@ -376,13 +411,29 @@ export default function App() {
     return true;
   }
 
-  // ---- coverage form -------------------------------------------------
-  const [coverageForm, setCoverageForm] = useState(defaultCoverageForm(null));
-  const [erosionForm, setErosionForm] = useState({
-    claimId: '', allocationId: '', sourceVersion: '1',
-    paidAmount: '250000.00', reservedAmount: '50000.00', recoveredAmount: '0.00'
-  });
+  function closeSelected() {
+    setSelected(null);
+    setTab('overview');
+    setCurrentVersion(null);
+  }
 
+  async function refreshWorkspace() {
+    setError('');
+    setNotice('');
+    try {
+      await load(page);
+      if (selected?.id) {
+        await openPolicy(selected.id, { keepTab: true, silent: true });
+        if (tab !== 'overview') {
+          await loadTabData(tab, selected.id);
+        }
+      }
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  // ---- coverage form -------------------------------------------------
   function updateCoverage(field, value) {
     setCoverageForm((current) => ({ ...current, [field]: value }));
   }
@@ -449,8 +500,6 @@ export default function App() {
   }
 
   // ---- endorsement form ---------------------------------------------
-  const [endorsementForm, setEndorsementForm] = useState(defaultEndorsementForm());
-
   function updateEndorsement(field, value) {
     setEndorsementForm((current) => ({ ...current, [field]: value }));
   }
@@ -487,9 +536,6 @@ export default function App() {
   }
 
   // ---- insured and location forms -----------------------------------
-  const [insuredForm, setInsuredForm] = useState(defaultInsuredForm(null));
-  const [locationForm, setLocationForm] = useState(defaultLocationForm(null));
-
   function updateInsured(field, value) {
     setInsuredForm((current) => ({ ...current, [field]: value }));
   }
@@ -548,9 +594,6 @@ export default function App() {
   }
 
   // ---- cancellation and reinstatement -------------------------------
-  const [cancelForm, setCancelForm] = useState(defaultCancelForm());
-  const [reinstateForm, setReinstateForm] = useState(defaultReinstateForm());
-
   function updateCancel(field, value) {
     setCancelForm((current) => ({ ...current, [field]: value }));
   }
@@ -611,822 +654,1284 @@ export default function App() {
   }
 
   const selectedPolicy = selected?.policy;
+  const advanceTarget = selectedPolicy ? nextStatusFor(selectedPolicy.status) : null;
 
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 1280, margin: '0 auto' }}>
-      <h1 style={{ marginBottom: 4 }}>Policy</h1>
-      <p style={{ marginTop: 0, color: '#555' }}>
-        Direct policies, versions, coverages and limits, endorsements, insureds and locations,
-        cancellation and reinstatement. New policies start in DRAFT and advance through the issued lifecycle.
-      </p>
+    <main>
+      <header className="eia-page-head">
+        <div>
+          <div className="eyebrow">Policy · Direct book</div>
+          <h1>Policy</h1>
+          <p className="subtitle">
+            Direct policies, versions, coverages and limits, endorsements, insureds and locations,
+            cancellation and reinstatement. New policies start in DRAFT and advance through the issued lifecycle.
+          </p>
+        </div>
+        <div className="eia-actions">
+          <span className="eia-badge direct">DIRECT book</span>
+          <button type="button" className="eia-btn-ghost" onClick={refreshWorkspace}>
+            Refresh
+          </button>
+          <button
+            type="button"
+            aria-expanded={showCreate}
+            onClick={() => setShowCreate((value) => !value)}
+          >
+            New policy
+          </button>
+        </div>
+      </header>
 
-      {error && <p role="alert" style={{ color: '#b00020', fontWeight: 600 }}>{error}</p>}
-      {notice && <p role="status" style={{ color: '#145c2c', fontWeight: 600 }}>{notice}</p>}
+      {error && <p role="alert">{error}</p>}
+      {notice && <p role="status">{notice}</p>}
 
-      <section aria-label="Create policy" style={{ marginBottom: 28 }}>
-        <h2 style={{ fontSize: 18 }}>Create policy</h2>
-        <form onSubmit={submit} style={gridStyle}>
-          <label style={labelStyle}>
-            Policy number (optional)
-            <input style={inputStyle} placeholder="Auto-generated if blank" value={form.policyNumber}
-                   onChange={(e) => update('policyNumber', e.target.value)} />
-          </label>
-          <label style={labelStyle}>
-            Product code
-            <input style={inputStyle} placeholder="CGL" value={form.productCode} required
-                   onChange={(e) => update('productCode', e.target.value)} />
-          </label>
-          <label style={labelStyle}>
-            Insured party ID
-            <input style={inputStyle} placeholder="Insured party ID (UUID)" value={form.insuredPartyId} required
-                   onChange={(e) => update('insuredPartyId', e.target.value)} />
-          </label>
-          <label style={labelStyle}>
-            Effective date
-            <input style={inputStyle} type="date" value={form.effectiveDate} required
-                   onChange={(e) => update('effectiveDate', e.target.value)} />
-          </label>
-          <label style={labelStyle}>
-            Expiration date
-            <input style={inputStyle} type="date" value={form.expirationDate} required
-                   onChange={(e) => update('expirationDate', e.target.value)} />
-          </label>
-          <label style={labelStyle}>
-            Premium
-            <input style={inputStyle} type="number" min="0" step="0.01" value={form.premiumAmount} required
-                   onChange={(e) => update('premiumAmount', e.target.value)} />
-          </label>
-          <label style={labelStyle}>
-            Premium currency
-            <input style={inputStyle} maxLength={3} placeholder="USD" value={form.premiumCurrency} required
-                   onChange={(e) => update('premiumCurrency', e.target.value.toUpperCase())} />
-          </label>
-          <label style={labelStyle}>
-            Limit
-            <input style={inputStyle} type="number" min="0" step="0.01" value={form.limitAmount} required
-                   onChange={(e) => update('limitAmount', e.target.value)} />
-          </label>
-          <label style={labelStyle}>
-            Limit currency
-            <input style={inputStyle} maxLength={3} placeholder="USD" value={form.limitCurrency} required
-                   onChange={(e) => update('limitCurrency', e.target.value.toUpperCase())} />
-          </label>
-          <div style={{ display: 'flex', alignItems: 'end' }}>
-            <button type="submit" disabled={saving} style={buttonStyle}>
-              {saving ? 'Creating…' : 'Create policy'}
+      {showCreate && (
+        <section className="eia-card" aria-label="Create policy" style={{ marginBottom: 16 }}>
+          <div className="eia-section-title" style={{ marginTop: 0 }}>
+            <h2>Create policy</h2>
+            <button type="button" className="eia-btn-ghost" onClick={() => setShowCreate(false)}>
+              Cancel
             </button>
           </div>
-        </form>
-      </section>
-
-      <section aria-label="Policies" style={{ marginBottom: 28 }}>
-        <h2 style={{ fontSize: 18 }}>Policies</h2>
-        <div style={{ overflowX: 'auto' }}>
-          <table width="100%" cellPadding="8" style={{ borderCollapse: 'collapse', fontSize: 14 }}>
-            <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '2px solid #ddd' }}>
-                <th>Number</th>
-                <th>Product</th>
-                <th>Status</th>
-                <th>Effective</th>
-                <th>Expiration</th>
-                <th>Premium</th>
-                <th>Limit</th>
-                <th>Version</th>
-                <th>ETag</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {policies.map((policy) => {
-                const target = nextStatusFor(policy.status);
-                return (
-                  <tr key={policy.id} style={{ borderTop: '1px solid #eee' }}>
-                    <td>{policy.policyNumber}</td>
-                    <td>{policy.productCode}</td>
-                    <td><span style={statusStyle(policy.status)}>{policy.status}</span></td>
-                    <td>{policy.effectiveDate}</td>
-                    <td>{policy.expirationDate}</td>
-                    <td>{formatMoney(policy.premiumAmount, policy.premiumCurrency)}</td>
-                    <td>{formatMoney(policy.limitAmount, policy.limitCurrency)}</td>
-                    <td>{policy.version}</td>
-                    <td><code>{formatEtag(policy.version)}</code></td>
-                    <td style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
-                        aria-label={`Open ${policy.policyNumber}`}
-                        onClick={() => openPolicy(policy.id)}
-                        style={linkButtonStyle}
-                      >
-                        Open
-                      </button>
-                      {target && (
-                        <button
-                          type="button"
-                          aria-label={`${policy.policyNumber}: advance to ${target}`}
-                          disabled={busyId === policy.id}
-                          onClick={() => advance(policy)}
-                          style={linkButtonStyle}
-                        >
-                          {busyId === policy.id ? 'Updating…' : `Advance to ${target}`}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-              {policies.length === 0 && (
-                <tr>
-                  <td colSpan={10} style={{ padding: 16, color: '#666' }}>
-                    {page > 0 ? 'No policies on this page.' : 'No policies yet.'}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <nav aria-label="Pagination" style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 14 }}>
-          <button type="button" onClick={() => goTo(page - 1)} disabled={page <= 0 || loading} style={buttonStyle}>
-            Previous
-          </button>
-          <span style={{ fontSize: 13, color: '#444' }}>
-            Page {page + 1} · {total} {total === 1 ? 'policy' : 'policies'}
-          </span>
-          <button type="button" onClick={() => goTo(page + 1)} disabled={!links?.next || loading} style={buttonStyle}>
-            Next
-          </button>
-        </nav>
-      </section>
-
-      {selectedPolicy && (
-        <section aria-label="Policy detail" style={{ border: '1px solid #ddd', borderRadius: 10, padding: 20 }}>
-          <header style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-            <div>
-              <h2 style={{ margin: 0 }}>{selectedPolicy.policyNumber}</h2>
-              <p style={{ margin: '6px 0 0', color: '#555' }}>
-                <span style={statusStyle(selectedPolicy.status)}>{selectedPolicy.status}</span>
-                {' '}· version {selectedPolicy.version} · <code>{selected.etag}</code>
-              </p>
+          <form className="eia-form-grid" onSubmit={submit}>
+            <div className="eia-field span-2">
+              <label htmlFor="create-policy-number">Policy number (optional)</label>
+              <input
+                id="create-policy-number"
+                placeholder="Auto-generated if blank"
+                value={form.policyNumber}
+                onChange={(e) => update('policyNumber', e.target.value)}
+              />
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'start' }}>
-              {nextStatusFor(selectedPolicy.status) && (
-                <button
-                  type="button"
-                  onClick={() => advance(selectedPolicy)}
-                  disabled={busyId === selectedPolicy.id}
-                  style={linkButtonStyle}
-                >
-                  Advance to {nextStatusFor(selectedPolicy.status)}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  setSelected(null);
-                  setCurrentVersion(null);
-                }}
-                style={linkButtonStyle}
-              >
-                Close
+            <div className="eia-field">
+              <label htmlFor="create-product-code">Product code</label>
+              <input
+                id="create-product-code"
+                placeholder="CGL"
+                value={form.productCode}
+                onChange={(e) => update('productCode', e.target.value)}
+                required
+              />
+            </div>
+            <div className="eia-field span-2">
+              <label htmlFor="create-insured-party">Insured party ID</label>
+              <input
+                id="create-insured-party"
+                placeholder="Insured party ID (UUID)"
+                value={form.insuredPartyId}
+                onChange={(e) => update('insuredPartyId', e.target.value)}
+                required
+              />
+            </div>
+            <div className="eia-field">
+              <label htmlFor="create-effective-date">Effective date</label>
+              <input
+                id="create-effective-date"
+                type="date"
+                value={form.effectiveDate}
+                onChange={(e) => update('effectiveDate', e.target.value)}
+                required
+              />
+            </div>
+            <div className="eia-field">
+              <label htmlFor="create-expiration-date">Expiration date</label>
+              <input
+                id="create-expiration-date"
+                type="date"
+                value={form.expirationDate}
+                onChange={(e) => update('expirationDate', e.target.value)}
+                required
+              />
+            </div>
+            <div className="eia-field">
+              <label htmlFor="create-premium">Premium</label>
+              <input
+                id="create-premium"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.premiumAmount}
+                onChange={(e) => update('premiumAmount', e.target.value)}
+                required
+              />
+            </div>
+            <div className="eia-field">
+              <label htmlFor="create-premium-currency">Premium currency</label>
+              <input
+                id="create-premium-currency"
+                maxLength={3}
+                placeholder="USD"
+                value={form.premiumCurrency}
+                onChange={(e) => update('premiumCurrency', e.target.value.toUpperCase())}
+                required
+              />
+            </div>
+            <div className="eia-field">
+              <label htmlFor="create-limit">Limit</label>
+              <input
+                id="create-limit"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.limitAmount}
+                onChange={(e) => update('limitAmount', e.target.value)}
+                required
+              />
+            </div>
+            <div className="eia-field">
+              <label htmlFor="create-limit-currency">Limit currency</label>
+              <input
+                id="create-limit-currency"
+                maxLength={3}
+                placeholder="USD"
+                value={form.limitCurrency}
+                onChange={(e) => update('limitCurrency', e.target.value.toUpperCase())}
+                required
+              />
+            </div>
+            <div className="eia-field">
+              <button type="submit" disabled={saving}>
+                {saving ? 'Creating…' : 'Create policy'}
               </button>
             </div>
-          </header>
-
-          <nav role="tablist" aria-label="Policy sections" style={{ display: 'flex', gap: 6, marginTop: 16, flexWrap: 'wrap' }}>
-            {TABS.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                role="tab"
-                aria-selected={tab === entry.id}
-                onClick={() => selectTab(entry.id)}
-                style={tab === entry.id ? activeTabStyle : inactiveTabStyle}
-              >
-                {entry.label}
-              </button>
-            ))}
-          </nav>
-
-          {tabLoading && <p style={{ color: '#555' }}>Loading…</p>}
-
-          {tab === 'overview' && (
-            <section aria-label="Overview" style={{ marginTop: 16 }}>
-              <dl style={definitionGridStyle}>
-                <Field label="Product" value={selectedPolicy.productCode} />
-                <Field label="Insured party" value={selectedPolicy.insuredPartyId} />
-                <Field label="Effective" value={selectedPolicy.effectiveDate} />
-                <Field label="Expiration" value={selectedPolicy.expirationDate} />
-                <Field label="Premium" value={formatMoney(selectedPolicy.premiumAmount, selectedPolicy.premiumCurrency)} />
-                <Field label="Limit" value={formatMoney(selectedPolicy.limitAmount, selectedPolicy.limitCurrency)} />
-                <Field label="Current version" value={currentVersion?.version?.policyVersionNumber || '—'} />
-              </dl>
-              <h3 style={{ fontSize: 16 }}>Current version</h3>
-              {currentVersion ? (
-                <table width="100%" cellPadding="8" style={tableStyle}>
-                  <thead>
-                    <tr style={headRowStyle}>
-                      <th>Version</th>
-                      <th>Change</th>
-                      <th>Status</th>
-                      <th>Effective from</th>
-                      <th>Hash verified</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td>{currentVersion.version?.policyVersionNumber}</td>
-                      <td>{currentVersion.version?.changeType}</td>
-                      <td>{currentVersion.version?.status}</td>
-                      <td>{currentVersion.version?.effectiveFrom}</td>
-                      <td>{currentVersion.hashVerified ? 'Yes' : 'No'}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              ) : (
-                <p style={{ color: '#666' }}>No version issued yet. Add a named insured and advance the policy to ISSUED.</p>
-              )}
-            </section>
-          )}
-
-          {tab === 'versions' && (
-            <section aria-label="Versions" style={{ marginTop: 16 }}>
-              <h3 style={{ fontSize: 16 }}>Version history</h3>
-              <table width="100%" cellPadding="8" style={tableStyle}>
-                <thead>
-                  <tr style={headRowStyle}>
-                    <th>Version</th>
-                    <th>Change</th>
-                    <th>Status</th>
-                    <th>Effective from</th>
-                    <th>Effective to</th>
-                    <th>Premium delta</th>
-                    <th>Hash</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {versions.map((version) => (
-                    <tr key={version.id} style={{ borderTop: '1px solid #eee' }}>
-                      <td>{version.policyVersionNumber}</td>
-                      <td>{version.changeType}</td>
-                      <td>{version.status}</td>
-                      <td>{version.effectiveFrom}</td>
-                      <td>{version.effectiveTo || '—'}</td>
-                      <td>{version.premiumDeltaAmount ? formatMoney(version.premiumDeltaAmount, version.premiumDeltaCurrency) : '—'}</td>
-                      <td><code>{String(version.immutableHash || '').slice(0, 12)}</code></td>
-                    </tr>
-                  ))}
-                  {versions.length === 0 && (
-                    <tr><td colSpan={7} style={emptyCellStyle}>No versions yet.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </section>
-          )}
-
-          {tab === 'coverages' && (
-            <section aria-label="Coverages and limits" style={{ marginTop: 16 }}>
-              <h3 style={{ fontSize: 16 }}>Coverages and limits</h3>
-              <table width="100%" cellPadding="8" style={tableStyle}>
-                <thead>
-                  <tr style={headRowStyle}>
-                    <th>Code</th>
-                    <th>Name</th>
-                    <th>Part</th>
-                    <th>Per occurrence</th>
-                    <th>Aggregate</th>
-                    <th>Deductible</th>
-                    <th>Coinsurance</th>
-                    <th>Remaining</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {coverages.map((entry) => (
-                    <tr key={entry.coverage?.id} style={{ borderTop: '1px solid #eee' }}>
-                      <td>{entry.coverage?.coverageCode}</td>
-                      <td>{entry.coverage?.coverageName}</td>
-                      <td>{entry.coverage?.coveragePart}</td>
-                      <td>{formatMoney(entry.limit?.perOccurrenceAmount, entry.limit?.currency)}</td>
-                      <td>{formatMoney(entry.limit?.aggregateAmount, entry.limit?.currency)}</td>
-                      <td>{formatMoney(entry.limit?.deductibleAmount, entry.limit?.currency)}</td>
-                      <td>{formatPercent(entry.limit?.coinsurancePct)}</td>
-                      <td>{formatMoney(entry.state?.remainingAmount, entry.limit?.currency)}</td>
-                    </tr>
-                  ))}
-                  {coverages.length === 0 && (
-                    <tr><td colSpan={8} style={emptyCellStyle}>No coverages yet.</td></tr>
-                  )}
-                </tbody>
-              </table>
-
-              <h3 style={{ fontSize: 16 }}>Add coverage</h3>
-              <form onSubmit={submitCoverage} style={gridStyle}>
-                <label style={labelStyle}>
-                  Coverage code
-                  <input style={inputStyle} value={coverageForm.coverageCode} required
-                         onChange={(e) => updateCoverage('coverageCode', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Coverage name
-                  <input style={inputStyle} value={coverageForm.coverageName} required
-                         onChange={(e) => updateCoverage('coverageName', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Part
-                  <select style={inputStyle} value={coverageForm.coveragePart}
-                          onChange={(e) => updateCoverage('coveragePart', e.target.value)}>
-                    <option value="A">A</option>
-                    <option value="B">B</option>
-                    <option value="C">C</option>
-                    <option value="D">D</option>
-                  </select>
-                </label>
-                <label style={labelStyle}>
-                  Occurrence basis
-                  <select style={inputStyle} value={coverageForm.occurrenceBasis}
-                          onChange={(e) => updateCoverage('occurrenceBasis', e.target.value)}>
-                    <option value="OCCURRENCE">OCCURRENCE</option>
-                    <option value="CLAIMS_MADE">CLAIMS_MADE</option>
-                    <option value="CLAIMS_MADE_WITH_RETRO">CLAIMS_MADE_WITH_RETRO</option>
-                    <option value="DISCOVERY">DISCOVERY</option>
-                  </select>
-                </label>
-                <label style={labelStyle}>
-                  Effective from
-                  <input style={inputStyle} type="date" value={coverageForm.effectiveFrom} required
-                         onChange={(e) => updateCoverage('effectiveFrom', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Effective to
-                  <input style={inputStyle} type="date" value={coverageForm.effectiveTo} required
-                         onChange={(e) => updateCoverage('effectiveTo', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Per occurrence
-                  <input style={inputStyle} type="number" min="0" step="0.01" value={coverageForm.perOccurrenceAmount}
-                         required onChange={(e) => updateCoverage('perOccurrenceAmount', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Aggregate (optional)
-                  <input style={inputStyle} type="number" min="0" step="0.01" value={coverageForm.aggregateAmount}
-                         onChange={(e) => updateCoverage('aggregateAmount', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Sublimit (optional)
-                  <input style={inputStyle} type="number" min="0" step="0.01" value={coverageForm.sublimitAmount}
-                         onChange={(e) => updateCoverage('sublimitAmount', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Deductible
-                  <input style={inputStyle} type="number" min="0" step="0.01" value={coverageForm.deductibleAmount}
-                         onChange={(e) => updateCoverage('deductibleAmount', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Coinsurance (fraction)
-                  <input style={inputStyle} type="number" min="0" max="1" step="0.01" value={coverageForm.coinsurancePct}
-                         onChange={(e) => updateCoverage('coinsurancePct', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Currency
-                  <input style={inputStyle} maxLength={3} value={coverageForm.currency} required
-                         onChange={(e) => updateCoverage('currency', e.target.value.toUpperCase())} />
-                </label>
-                <div style={{ display: 'flex', alignItems: 'end' }}>
-                  <button type="submit" style={buttonStyle}>Add coverage</button>
-                </div>
-              </form>
-
-              <h3 style={{ fontSize: 16 }}>Apply aggregate erosion</h3>
-              <p style={{ color: '#555', marginTop: 0 }}>
-                Posts an idempotent erosion fact against the first limit on the policy; replaying the same
-                claim/allocation/source version never double-counts.
-              </p>
-              <form onSubmit={submitErosion} style={gridStyle}>
-                <label style={labelStyle}>
-                  Claim ID
-                  <input style={inputStyle} placeholder="Claim UUID" value={erosionForm.claimId} required
-                         onChange={(e) => updateErosion('claimId', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Allocation ID
-                  <input style={inputStyle} placeholder="Allocation UUID" value={erosionForm.allocationId} required
-                         onChange={(e) => updateErosion('allocationId', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Source version
-                  <input style={inputStyle} type="number" min="1" value={erosionForm.sourceVersion} required
-                         onChange={(e) => updateErosion('sourceVersion', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Paid
-                  <input style={inputStyle} type="number" min="0" step="0.01" value={erosionForm.paidAmount}
-                         onChange={(e) => updateErosion('paidAmount', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Reserved
-                  <input style={inputStyle} type="number" min="0" step="0.01" value={erosionForm.reservedAmount}
-                         onChange={(e) => updateErosion('reservedAmount', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Recovered
-                  <input style={inputStyle} type="number" min="0" step="0.01" value={erosionForm.recoveredAmount}
-                         onChange={(e) => updateErosion('recoveredAmount', e.target.value)} />
-                </label>
-                <div style={{ display: 'flex', alignItems: 'end' }}>
-                  <button type="submit" disabled={coverages.length === 0} style={buttonStyle}>
-                    Apply erosion
-                  </button>
-                </div>
-              </form>
-            </section>
-          )}
-
-          {tab === 'endorsements' && (
-            <section aria-label="Endorsements" style={{ marginTop: 16 }}>
-              <h3 style={{ fontSize: 16 }}>Endorsements</h3>
-              <table width="100%" cellPadding="8" style={tableStyle}>
-                <thead>
-                  <tr style={headRowStyle}>
-                    <th>Number</th>
-                    <th>Type</th>
-                    <th>Effective</th>
-                    <th>Impact</th>
-                    <th>Premium delta</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {endorsements.map((endorsement) => (
-                    <tr key={endorsement.id} style={{ borderTop: '1px solid #eee' }}>
-                      <td>{endorsement.endorsementNumber}</td>
-                      <td>{endorsement.endorsementType}</td>
-                      <td>{endorsement.effectiveDate}</td>
-                      <td>{endorsement.coverageImpact}</td>
-                      <td>{endorsement.premiumDeltaAmount
-                        ? formatMoney(endorsement.premiumDeltaAmount, endorsement.premiumDeltaCurrency) : '—'}</td>
-                      <td>{endorsement.status}</td>
-                    </tr>
-                  ))}
-                  {endorsements.length === 0 && (
-                    <tr><td colSpan={6} style={emptyCellStyle}>No endorsements yet.</td></tr>
-                  )}
-                </tbody>
-              </table>
-
-              <h3 style={{ fontSize: 16 }}>Add endorsement</h3>
-              <form onSubmit={submitEndorsement} style={gridStyle}>
-                <label style={labelStyle}>
-                  Type
-                  <select style={inputStyle} value={endorsementForm.endorsementType}
-                          onChange={(e) => updateEndorsement('endorsementType', e.target.value)}>
-                    {['COVERAGE', 'LIMIT', 'PARTY', 'PREMIUM', 'RETENTION', 'EXCLUSION',
-                      'TERRITORY', 'CORRECTION', 'MANUSCRIPT'].map((type) => (
-                      <option key={type} value={type}>{type}</option>
-                    ))}
-                  </select>
-                </label>
-                <label style={labelStyle}>
-                  Effective date
-                  <input style={inputStyle} type="date" value={endorsementForm.effectiveDate} required
-                         onChange={(e) => updateEndorsement('effectiveDate', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Description
-                  <input style={inputStyle} value={endorsementForm.description} required
-                         onChange={(e) => updateEndorsement('description', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Premium delta
-                  <input style={inputStyle} type="number" step="0.01" value={endorsementForm.premiumDeltaAmount}
-                         onChange={(e) => updateEndorsement('premiumDeltaAmount', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Delta currency
-                  <input style={inputStyle} maxLength={3} value={endorsementForm.premiumDeltaCurrency}
-                         onChange={(e) => updateEndorsement('premiumDeltaCurrency', e.target.value.toUpperCase())} />
-                </label>
-                <label style={labelStyle}>
-                  Coverage impact
-                  <select style={inputStyle} value={endorsementForm.coverageImpact}
-                          onChange={(e) => updateEndorsement('coverageImpact', e.target.value)}>
-                    {['NONE', 'BROADEN', 'RESTRICT', 'CLARIFY'].map((impact) => (
-                      <option key={impact} value={impact}>{impact}</option>
-                    ))}
-                  </select>
-                </label>
-                <label style={labelStyle}>
-                  Backdate reason (required before inception)
-                  <input style={inputStyle} value={endorsementForm.backdateReason}
-                         onChange={(e) => updateEndorsement('backdateReason', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Approver ID
-                  <input style={inputStyle} placeholder="Approver UUID" value={endorsementForm.approvedBy}
-                         onChange={(e) => updateEndorsement('approvedBy', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Approval reference
-                  <input style={inputStyle} placeholder="Approval UUID" value={endorsementForm.approvalRef}
-                         onChange={(e) => updateEndorsement('approvalRef', e.target.value)} />
-                </label>
-                <div style={{ display: 'flex', alignItems: 'end' }}>
-                  <button type="submit" style={buttonStyle}>Add endorsement</button>
-                </div>
-              </form>
-            </section>
-          )}
-
-          {tab === 'parties' && (
-            <section aria-label="Insureds and locations" style={{ marginTop: 16 }}>
-              <h3 style={{ fontSize: 16 }}>Insureds</h3>
-              <table width="100%" cellPadding="8" style={tableStyle}>
-                <thead>
-                  <tr style={headRowStyle}>
-                    <th>Party</th>
-                    <th>Role</th>
-                    <th>Name</th>
-                    <th>Effective from</th>
-                    <th>Effective to</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {insureds.map((insured) => (
-                    <tr key={insured.id} style={{ borderTop: '1px solid #eee' }}>
-                      <td><code>{String(insured.partyId || '').slice(0, 8)}…</code></td>
-                      <td>{insured.insuredRole}</td>
-                      <td>{insured.displayName}</td>
-                      <td>{insured.effectiveFrom}</td>
-                      <td>{insured.effectiveTo}</td>
-                      <td>{insured.status}</td>
-                    </tr>
-                  ))}
-                  {insureds.length === 0 && (
-                    <tr><td colSpan={6} style={emptyCellStyle}>No insureds yet.</td></tr>
-                  )}
-                </tbody>
-              </table>
-
-              <form onSubmit={submitInsured} style={gridStyle}>
-                <label style={labelStyle}>
-                  Party ID
-                  <input style={inputStyle} placeholder="Party UUID" value={insuredForm.partyId} required
-                         onChange={(e) => updateInsured('partyId', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Role
-                  <select style={inputStyle} value={insuredForm.insuredRole}
-                          onChange={(e) => updateInsured('insuredRole', e.target.value)}>
-                    {['NAMED_INSURED', 'ADDITIONAL_INSURED', 'INSURED_ORGANIZATION', 'LOSS_PAYEE',
-                      'MORTGAGEE', 'LENDER', 'CERTIFICATE_HOLDER'].map((role) => (
-                      <option key={role} value={role}>{role}</option>
-                    ))}
-                  </select>
-                </label>
-                <label style={labelStyle}>
-                  Display name
-                  <input style={inputStyle} value={insuredForm.displayName} required
-                         onChange={(e) => updateInsured('displayName', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Certificate number
-                  <input style={inputStyle} value={insuredForm.certificateNumber}
-                         onChange={(e) => updateInsured('certificateNumber', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Effective from
-                  <input style={inputStyle} type="date" value={insuredForm.effectiveFrom} required
-                         onChange={(e) => updateInsured('effectiveFrom', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Effective to
-                  <input style={inputStyle} type="date" value={insuredForm.effectiveTo} required
-                         onChange={(e) => updateInsured('effectiveTo', e.target.value)} />
-                </label>
-                <div style={{ display: 'flex', alignItems: 'end' }}>
-                  <button type="submit" style={buttonStyle}>Add insured</button>
-                </div>
-              </form>
-
-              <h3 style={{ fontSize: 16 }}>Locations</h3>
-              <table width="100%" cellPadding="8" style={tableStyle}>
-                <thead>
-                  <tr style={headRowStyle}>
-                    <th>Code</th>
-                    <th>Address</th>
-                    <th>City</th>
-                    <th>State</th>
-                    <th>Country</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {locations.map((location) => (
-                    <tr key={location.id} style={{ borderTop: '1px solid #eee' }}>
-                      <td>{location.locationCode}</td>
-                      <td>{location.addressLine1}</td>
-                      <td>{location.city}</td>
-                      <td>{location.stateRegion}</td>
-                      <td>{location.country}</td>
-                      <td>{location.status}</td>
-                    </tr>
-                  ))}
-                  {locations.length === 0 && (
-                    <tr><td colSpan={6} style={emptyCellStyle}>No locations yet.</td></tr>
-                  )}
-                </tbody>
-              </table>
-
-              <form onSubmit={submitLocation} style={gridStyle}>
-                <label style={labelStyle}>
-                  Location code
-                  <input style={inputStyle} value={locationForm.locationCode} required
-                         onChange={(e) => updateLocation('locationCode', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Address line 1
-                  <input style={inputStyle} value={locationForm.addressLine1} required
-                         onChange={(e) => updateLocation('addressLine1', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  City
-                  <input style={inputStyle} value={locationForm.city} required
-                         onChange={(e) => updateLocation('city', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  State / region
-                  <input style={inputStyle} placeholder="US-OH" value={locationForm.stateRegion} required
-                         onChange={(e) => updateLocation('stateRegion', e.target.value.toUpperCase())} />
-                </label>
-                <label style={labelStyle}>
-                  Postal code
-                  <input style={inputStyle} value={locationForm.postalCode}
-                         onChange={(e) => updateLocation('postalCode', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Country
-                  <input style={inputStyle} maxLength={3} value={locationForm.country} required
-                         onChange={(e) => updateLocation('country', e.target.value.toUpperCase())} />
-                </label>
-                <label style={labelStyle}>
-                  Effective from
-                  <input style={inputStyle} type="date" value={locationForm.effectiveFrom} required
-                         onChange={(e) => updateLocation('effectiveFrom', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Effective to
-                  <input style={inputStyle} type="date" value={locationForm.effectiveTo} required
-                         onChange={(e) => updateLocation('effectiveTo', e.target.value)} />
-                </label>
-                <div style={{ display: 'flex', alignItems: 'end' }}>
-                  <button type="submit" style={buttonStyle}>Add location</button>
-                </div>
-              </form>
-            </section>
-          )}
-
-          {tab === 'cancellation' && (
-            <section aria-label="Cancellation and reinstatement" style={{ marginTop: 16 }}>
-              <h3 style={{ fontSize: 16 }}>Cancellations</h3>
-              <table width="100%" cellPadding="8" style={tableStyle}>
-                <thead>
-                  <tr style={headRowStyle}>
-                    <th>Type</th>
-                    <th>Reason</th>
-                    <th>Effective</th>
-                    <th>Return premium</th>
-                    <th>Pro-rata</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cancellations.map((cancellation) => (
-                    <tr key={cancellation.id} style={{ borderTop: '1px solid #eee' }}>
-                      <td>{cancellation.cancellationType}</td>
-                      <td>{cancellation.reason}</td>
-                      <td>{cancellation.effectiveDate}</td>
-                      <td>{formatMoney(cancellation.returnPremiumAmount, cancellation.premiumCurrency)}</td>
-                      <td>{formatPercent(cancellation.proRataPct)}</td>
-                      <td>{cancellation.status}</td>
-                    </tr>
-                  ))}
-                  {cancellations.length === 0 && (
-                    <tr><td colSpan={6} style={emptyCellStyle}>No cancellations.</td></tr>
-                  )}
-                </tbody>
-              </table>
-
-              <form onSubmit={submitCancel} style={gridStyle}>
-                <label style={labelStyle}>
-                  Cancellation type
-                  <select style={inputStyle} value={cancelForm.cancellationType}
-                          onChange={(e) => updateCancel('cancellationType', e.target.value)}>
-                    {['PRO_RATA', 'FLAT', 'SHORT_RATE', 'NON_PAYMENT', 'VOID'].map((type) => (
-                      <option key={type} value={type}>{type}</option>
-                    ))}
-                  </select>
-                </label>
-                <label style={labelStyle}>
-                  Reason
-                  <input style={inputStyle} value={cancelForm.reason} required
-                         onChange={(e) => updateCancel('reason', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Effective date
-                  <input style={inputStyle} type="date" value={cancelForm.effectiveDate} required
-                         onChange={(e) => updateCancel('effectiveDate', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Notice days
-                  <input style={inputStyle} type="number" min="0" value={cancelForm.noticeDays}
-                         onChange={(e) => updateCancel('noticeDays', e.target.value)} />
-                </label>
-                <div style={{ display: 'flex', alignItems: 'end' }}>
-                  <button type="submit" style={buttonStyle}>Cancel policy</button>
-                </div>
-              </form>
-
-              <h3 style={{ fontSize: 16 }}>Reinstatements</h3>
-              <table width="100%" cellPadding="8" style={tableStyle}>
-                <thead>
-                  <tr style={headRowStyle}>
-                    <th>Effective</th>
-                    <th>Reason</th>
-                    <th>Premium evidence</th>
-                    <th>Amount</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reinstatements.map((reinstatement) => (
-                    <tr key={reinstatement.id} style={{ borderTop: '1px solid #eee' }}>
-                      <td>{reinstatement.effectiveDate}</td>
-                      <td>{reinstatement.reason}</td>
-                      <td>{reinstatement.premiumEvidenceRef}</td>
-                      <td>{formatMoney(reinstatement.premiumEvidenceAmount, reinstatement.premiumEvidenceCurrency)}</td>
-                      <td>{reinstatement.status}</td>
-                    </tr>
-                  ))}
-                  {reinstatements.length === 0 && (
-                    <tr><td colSpan={5} style={emptyCellStyle}>No reinstatements.</td></tr>
-                  )}
-                </tbody>
-              </table>
-
-              <form onSubmit={submitReinstate} style={gridStyle}>
-                <label style={labelStyle}>
-                  Effective date
-                  <input style={inputStyle} type="date" value={reinstateForm.effectiveDate} required
-                         onChange={(e) => updateReinstate('effectiveDate', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Reason
-                  <input style={inputStyle} value={reinstateForm.reason} required
-                         onChange={(e) => updateReinstate('reason', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Approver ID
-                  <input style={inputStyle} placeholder="Approver UUID" value={reinstateForm.approvedBy} required
-                         onChange={(e) => updateReinstate('approvedBy', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Approval reference
-                  <input style={inputStyle} placeholder="Approval UUID" value={reinstateForm.approvalRef} required
-                         onChange={(e) => updateReinstate('approvalRef', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Premium evidence reference
-                  <input style={inputStyle} value={reinstateForm.premiumEvidenceRef} required
-                         onChange={(e) => updateReinstate('premiumEvidenceRef', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Evidence amount
-                  <input style={inputStyle} type="number" min="0" step="0.01" value={reinstateForm.premiumEvidenceAmount}
-                         required onChange={(e) => updateReinstate('premiumEvidenceAmount', e.target.value)} />
-                </label>
-                <label style={labelStyle}>
-                  Evidence currency
-                  <input style={inputStyle} maxLength={3} value={reinstateForm.premiumEvidenceCurrency} required
-                         onChange={(e) => updateReinstate('premiumEvidenceCurrency', e.target.value.toUpperCase())} />
-                </label>
-                <div style={{ display: 'flex', alignItems: 'end' }}>
-                  <button type="submit" style={buttonStyle}>Reinstate policy</button>
-                </div>
-              </form>
-            </section>
-          )}
+          </form>
         </section>
       )}
-    </main>
-  );
-}
 
-function Field({ label, value }) {
-  return (
-    <div>
-      <dt style={{ fontSize: 12, color: '#666', fontWeight: 600 }}>{label}</dt>
-      <dd style={{ margin: '2px 0 0', fontSize: 14 }}>{value}</dd>
-    </div>
+      <div className="eia-record-layout">
+        <div>
+          <aside className="eia-record-list" aria-label="Policy register">
+            <div className="eia-record-list-head">
+              <strong>Direct policies</strong>
+              <span className="eia-muted">{total}</span>
+            </div>
+            {policies.map((policy) => {
+              const isSelected = selected?.id === policy.id;
+              return (
+                <button
+                  key={policy.id}
+                  type="button"
+                  className={isSelected ? 'selected' : ''}
+                  aria-pressed={isSelected}
+                  aria-label={`Open record ${policy.policyNumber}`}
+                  onClick={() => openPolicy(policy.id)}
+                >
+                  <span className="record-primary">{policy.policyNumber}</span>
+                  <span className="record-secondary">Insured {insuredLabel(policy)}</span>
+                  <span className="record-secondary">
+                    {policy.productCode || '—'} · version {policy.version ?? '—'}
+                  </span>
+                  <span>
+                    <span className={`eia-pill ${statusTone(policy.status)}`}>{policy.status}</span>
+                  </span>
+                </button>
+              );
+            })}
+            {policies.length === 0 && (
+              <div className="empty">
+                {page > 0 ? 'No policies on this page.' : 'No policies yet. Use New policy to open the first record.'}
+              </div>
+            )}
+          </aside>
+
+          <nav
+            aria-label="Pagination"
+            className="eia-toolbar"
+            style={{ marginTop: 10, marginBottom: 0, justifyContent: 'space-between' }}
+          >
+            <button
+              type="button"
+              className="eia-btn-secondary"
+              onClick={() => goTo(page - 1)}
+              disabled={page <= 0 || loading}
+            >
+              Previous
+            </button>
+            <span className="eia-muted">
+              Page {page + 1} · {total} {total === 1 ? 'policy' : 'policies'}
+            </span>
+            <button
+              type="button"
+              className="eia-btn-secondary"
+              onClick={() => goTo(page + 1)}
+              disabled={!links?.next || loading}
+            >
+              Next
+            </button>
+          </nav>
+        </div>
+
+        <section className="eia-record-panel" aria-label="Policy record">
+          {!selectedPolicy ? (
+            <div className="eia-empty">
+              Select a policy from the direct book to open its record, or create a new policy to start a quote.
+            </div>
+          ) : (
+            <>
+              <div className="eia-record-title">
+                <div>
+                  <h2>{selectedPolicy.policyNumber}</h2>
+                  <p className="eia-record-subtitle">
+                    <span
+                      className={`eia-pill ${statusTone(selectedPolicy.status)}`}
+                      data-testid="policy-status"
+                    >
+                      {selectedPolicy.status}
+                    </span>
+                    {' · '}
+                    Product {selectedPolicy.productCode || '—'}
+                    {' · '}
+                    Version {selectedPolicy.version ?? '—'}
+                    {' · '}
+                    ETag <code className="eia-mono" data-testid="policy-etag">{selected.etag}</code>
+                  </p>
+                </div>
+                <div className="eia-actions">
+                  {advanceTarget && (
+                    <button
+                      type="button"
+                      onClick={() => advance(selectedPolicy)}
+                      disabled={busyId === selectedPolicy.id}
+                    >
+                      {busyId === selectedPolicy.id ? 'Advancing…' : `Advance to ${advanceTarget}`}
+                    </button>
+                  )}
+                  <button type="button" className="eia-btn-ghost" onClick={closeSelected}>
+                    Close
+                  </button>
+                </div>
+              </div>
+
+              <div className="eia-summary-grid">
+                <div className="eia-card">
+                  <h3>Premium</h3>
+                  <div className="value">
+                    {formatMoney(selectedPolicy.premiumAmount, selectedPolicy.premiumCurrency)}
+                  </div>
+                  <div className="eia-metric-label">
+                    {selectedPolicy.premiumCurrency || '—'} written premium
+                  </div>
+                </div>
+                <div className="eia-card">
+                  <h3>Limit</h3>
+                  <div className="value">
+                    {formatMoney(selectedPolicy.limitAmount, selectedPolicy.limitCurrency)}
+                  </div>
+                  <div className="eia-metric-label">
+                    {selectedPolicy.limitCurrency || '—'} policy limit
+                  </div>
+                </div>
+                <div className="eia-card">
+                  <h3>Effective</h3>
+                  <div className="value">{selectedPolicy.effectiveDate || '—'}</div>
+                  <div className="eia-metric-label">policy inception</div>
+                </div>
+                <div className="eia-card">
+                  <h3>Expiration</h3>
+                  <div className="value">{selectedPolicy.expirationDate || '—'}</div>
+                  <div className="eia-metric-label">policy expiration</div>
+                </div>
+              </div>
+
+              <nav className="eia-tabs" role="tablist" aria-label="Policy sections">
+                {TABS.map((entry) => (
+                  <button
+                    key={entry.id}
+                    id={`tab-${entry.id}`}
+                    type="button"
+                    role="tab"
+                    className={`eia-tab${tab === entry.id ? ' active' : ''}`}
+                    aria-selected={tab === entry.id}
+                    aria-controls={`panel-${entry.id}`}
+                    onClick={() => selectTab(entry.id)}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+              </nav>
+
+              {tabLoading && <p className="eia-muted">Loading…</p>}
+
+              {tab === 'overview' && (
+                <section
+                  id="panel-overview"
+                  role="tabpanel"
+                  aria-labelledby="tab-overview"
+                >
+                  <div className="eia-grid eia-grid-2">
+                    <section className="eia-card" aria-label="Policy details">
+                      <h3>Policy details</h3>
+                      <dl className="eia-kv" style={{ marginTop: 8 }}>
+                        <dt>Policy number</dt>
+                        <dd className="eia-mono">{selectedPolicy.policyNumber}</dd>
+                        <dt>Product</dt>
+                        <dd>{selectedPolicy.productCode || '—'}</dd>
+                        <dt>Insured party</dt>
+                        <dd>{selectedPolicy.insuredDisplayName || selectedPolicy.insuredPartyId || '—'}</dd>
+                        <dt>Effective</dt>
+                        <dd>{selectedPolicy.effectiveDate || '—'}</dd>
+                        <dt>Expiration</dt>
+                        <dd>{selectedPolicy.expirationDate || '—'}</dd>
+                        <dt>Premium</dt>
+                        <dd>{formatMoney(selectedPolicy.premiumAmount, selectedPolicy.premiumCurrency)}</dd>
+                        <dt>Limit</dt>
+                        <dd>{formatMoney(selectedPolicy.limitAmount, selectedPolicy.limitCurrency)}</dd>
+                        <dt>Version</dt>
+                        <dd>{selectedPolicy.version ?? '—'}</dd>
+                      </dl>
+                    </section>
+
+                    <section className="eia-card" aria-label="Current version">
+                      <h3>Current version</h3>
+                      {currentVersion?.version ? (
+                        <dl className="eia-kv" style={{ marginTop: 8 }}>
+                          <dt>Version</dt>
+                          <dd className="eia-mono">{currentVersion.version?.policyVersionNumber}</dd>
+                          <dt>Change</dt>
+                          <dd>{currentVersion.version?.changeType}</dd>
+                          <dt>Status</dt>
+                          <dd>{currentVersion.version?.status}</dd>
+                          <dt>Effective from</dt>
+                          <dd>{currentVersion.version?.effectiveFrom}</dd>
+                          <dt>Hash verified</dt>
+                          <dd>{currentVersion.hashVerified ? 'Yes' : 'No'}</dd>
+                        </dl>
+                      ) : (
+                        <p className="eia-muted" style={{ marginTop: 8 }}>
+                          No version issued yet. Add a named insured and advance the policy to ISSUED.
+                        </p>
+                      )}
+                    </section>
+                  </div>
+                </section>
+              )}
+
+              {tab === 'versions' && (
+                <section
+                  id="panel-versions"
+                  role="tabpanel"
+                  aria-labelledby="tab-versions"
+                >
+                  <div className="eia-section-title">
+                    <h2>Version history</h2>
+                    <span className="eia-muted">
+                      {versions.length} version{versions.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className="eia-table-wrap">
+                    <table className="eia-table">
+                      <thead>
+                        <tr>
+                          <th>Version</th>
+                          <th>Change</th>
+                          <th>Status</th>
+                          <th>Effective from</th>
+                          <th>Effective to</th>
+                          <th>Premium delta</th>
+                          <th>Hash</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {versions.map((version) => (
+                          <tr key={version.id}>
+                            <td>{version.policyVersionNumber}</td>
+                            <td>{version.changeType}</td>
+                            <td>{version.status}</td>
+                            <td>{version.effectiveFrom}</td>
+                            <td>{version.effectiveTo || '—'}</td>
+                            <td>
+                              {version.premiumDeltaAmount
+                                ? formatMoney(version.premiumDeltaAmount, version.premiumDeltaCurrency)
+                                : '—'}
+                            </td>
+                            <td><code className="eia-mono">{String(version.immutableHash || '').slice(0, 12)}</code></td>
+                          </tr>
+                        ))}
+                        {versions.length === 0 && (
+                          <tr><td className="eia-muted" colSpan={7}>No versions yet.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
+
+              {tab === 'coverages' && (
+                <section
+                  id="panel-coverages"
+                  role="tabpanel"
+                  aria-labelledby="tab-coverages"
+                >
+                  <div className="eia-section-title">
+                    <h2>Coverages and limits</h2>
+                    <span className="eia-muted">
+                      {coverages.length} coverage{coverages.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className="eia-table-wrap">
+                    <table className="eia-table">
+                      <thead>
+                        <tr>
+                          <th>Code</th>
+                          <th>Name</th>
+                          <th>Part</th>
+                          <th>Per occurrence</th>
+                          <th>Aggregate</th>
+                          <th>Deductible</th>
+                          <th>Coinsurance</th>
+                          <th>Remaining</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {coverages.map((entry) => (
+                          <tr key={entry.coverage?.id}>
+                            <td>{entry.coverage?.coverageCode}</td>
+                            <td>{entry.coverage?.coverageName}</td>
+                            <td>{entry.coverage?.coveragePart}</td>
+                            <td>{formatMoney(entry.limit?.perOccurrenceAmount, entry.limit?.currency)}</td>
+                            <td>{formatMoney(entry.limit?.aggregateAmount, entry.limit?.currency)}</td>
+                            <td>{formatMoney(entry.limit?.deductibleAmount, entry.limit?.currency)}</td>
+                            <td>{formatPercent(entry.limit?.coinsurancePct)}</td>
+                            <td>{formatMoney(entry.state?.remainingAmount, entry.limit?.currency)}</td>
+                          </tr>
+                        ))}
+                        {coverages.length === 0 && (
+                          <tr><td className="eia-muted" colSpan={8}>No coverages yet.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <section className="eia-card" aria-label="Add coverage" style={{ marginTop: 16 }}>
+                    <div className="eia-section-title" style={{ marginTop: 0 }}>
+                      <h2>Add coverage</h2>
+                      <span className="eia-muted">Writes with the current If-Match ETag</span>
+                    </div>
+                    <form className="eia-form-grid" onSubmit={submitCoverage}>
+                      <div className="eia-field">
+                        <label htmlFor="coverage-code">Coverage code</label>
+                        <input
+                          id="coverage-code"
+                          value={coverageForm.coverageCode}
+                          onChange={(e) => updateCoverage('coverageCode', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field span-2">
+                        <label htmlFor="coverage-name">Coverage name</label>
+                        <input
+                          id="coverage-name"
+                          value={coverageForm.coverageName}
+                          onChange={(e) => updateCoverage('coverageName', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="coverage-part">Part</label>
+                        <select
+                          id="coverage-part"
+                          value={coverageForm.coveragePart}
+                          onChange={(e) => updateCoverage('coveragePart', e.target.value)}
+                        >
+                          <option value="A">A</option>
+                          <option value="B">B</option>
+                          <option value="C">C</option>
+                          <option value="D">D</option>
+                        </select>
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="coverage-occurrence-basis">Occurrence basis</label>
+                        <select
+                          id="coverage-occurrence-basis"
+                          value={coverageForm.occurrenceBasis}
+                          onChange={(e) => updateCoverage('occurrenceBasis', e.target.value)}
+                        >
+                          <option value="OCCURRENCE">OCCURRENCE</option>
+                          <option value="CLAIMS_MADE">CLAIMS_MADE</option>
+                          <option value="CLAIMS_MADE_WITH_RETRO">CLAIMS_MADE_WITH_RETRO</option>
+                          <option value="DISCOVERY">DISCOVERY</option>
+                        </select>
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="coverage-effective-from">Effective from</label>
+                        <input
+                          id="coverage-effective-from"
+                          type="date"
+                          value={coverageForm.effectiveFrom}
+                          onChange={(e) => updateCoverage('effectiveFrom', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="coverage-effective-to">Effective to</label>
+                        <input
+                          id="coverage-effective-to"
+                          type="date"
+                          value={coverageForm.effectiveTo}
+                          onChange={(e) => updateCoverage('effectiveTo', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="coverage-per-occurrence">Per occurrence</label>
+                        <input
+                          id="coverage-per-occurrence"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={coverageForm.perOccurrenceAmount}
+                          onChange={(e) => updateCoverage('perOccurrenceAmount', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="coverage-aggregate">Aggregate (optional)</label>
+                        <input
+                          id="coverage-aggregate"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={coverageForm.aggregateAmount}
+                          onChange={(e) => updateCoverage('aggregateAmount', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="coverage-sublimit">Sublimit (optional)</label>
+                        <input
+                          id="coverage-sublimit"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={coverageForm.sublimitAmount}
+                          onChange={(e) => updateCoverage('sublimitAmount', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="coverage-deductible">Deductible</label>
+                        <input
+                          id="coverage-deductible"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={coverageForm.deductibleAmount}
+                          onChange={(e) => updateCoverage('deductibleAmount', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="coverage-coinsurance">Coinsurance (fraction)</label>
+                        <input
+                          id="coverage-coinsurance"
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={coverageForm.coinsurancePct}
+                          onChange={(e) => updateCoverage('coinsurancePct', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="coverage-currency">Currency</label>
+                        <input
+                          id="coverage-currency"
+                          maxLength={3}
+                          value={coverageForm.currency}
+                          onChange={(e) => updateCoverage('currency', e.target.value.toUpperCase())}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <button type="submit">Add coverage</button>
+                      </div>
+                    </form>
+                  </section>
+
+                  <section className="eia-card" aria-label="Apply aggregate erosion" style={{ marginTop: 16 }}>
+                    <div className="eia-section-title" style={{ marginTop: 0 }}>
+                      <h2>Apply aggregate erosion</h2>
+                    </div>
+                    <p className="eia-muted" style={{ marginTop: 0 }}>
+                      Posts an idempotent erosion fact against the first limit on the policy; replaying the same
+                      claim/allocation/source version never double-counts.
+                    </p>
+                    <form className="eia-form-grid" onSubmit={submitErosion}>
+                      <div className="eia-field">
+                        <label htmlFor="erosion-claim">Claim ID</label>
+                        <input
+                          id="erosion-claim"
+                          placeholder="Claim UUID"
+                          value={erosionForm.claimId}
+                          onChange={(e) => updateErosion('claimId', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="erosion-allocation">Allocation ID</label>
+                        <input
+                          id="erosion-allocation"
+                          placeholder="Allocation UUID"
+                          value={erosionForm.allocationId}
+                          onChange={(e) => updateErosion('allocationId', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="erosion-source-version">Source version</label>
+                        <input
+                          id="erosion-source-version"
+                          type="number"
+                          min="1"
+                          value={erosionForm.sourceVersion}
+                          onChange={(e) => updateErosion('sourceVersion', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="erosion-paid">Paid</label>
+                        <input
+                          id="erosion-paid"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={erosionForm.paidAmount}
+                          onChange={(e) => updateErosion('paidAmount', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="erosion-reserved">Reserved</label>
+                        <input
+                          id="erosion-reserved"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={erosionForm.reservedAmount}
+                          onChange={(e) => updateErosion('reservedAmount', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="erosion-recovered">Recovered</label>
+                        <input
+                          id="erosion-recovered"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={erosionForm.recoveredAmount}
+                          onChange={(e) => updateErosion('recoveredAmount', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <button type="submit" disabled={coverages.length === 0}>
+                          Apply erosion
+                        </button>
+                      </div>
+                    </form>
+                  </section>
+                </section>
+              )}
+
+              {tab === 'endorsements' && (
+                <section
+                  id="panel-endorsements"
+                  role="tabpanel"
+                  aria-labelledby="tab-endorsements"
+                >
+                  <div className="eia-section-title">
+                    <h2>Endorsements</h2>
+                    <span className="eia-muted">
+                      {endorsements.length} endorsement{endorsements.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className="eia-table-wrap">
+                    <table className="eia-table">
+                      <thead>
+                        <tr>
+                          <th>Number</th>
+                          <th>Type</th>
+                          <th>Effective</th>
+                          <th>Impact</th>
+                          <th>Premium delta</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {endorsements.map((endorsement) => (
+                          <tr key={endorsement.id}>
+                            <td>{endorsement.endorsementNumber}</td>
+                            <td>{endorsement.endorsementType}</td>
+                            <td>{endorsement.effectiveDate}</td>
+                            <td>{endorsement.coverageImpact}</td>
+                            <td>
+                              {endorsement.premiumDeltaAmount
+                                ? formatMoney(endorsement.premiumDeltaAmount, endorsement.premiumDeltaCurrency)
+                                : '—'}
+                            </td>
+                            <td>{endorsement.status}</td>
+                          </tr>
+                        ))}
+                        {endorsements.length === 0 && (
+                          <tr><td className="eia-muted" colSpan={6}>No endorsements yet.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <section className="eia-card" aria-label="Add endorsement" style={{ marginTop: 16 }}>
+                    <div className="eia-section-title" style={{ marginTop: 0 }}>
+                      <h2>Add endorsement</h2>
+                      <span className="eia-muted">Issues a new immutable version</span>
+                    </div>
+                    <form className="eia-form-grid" onSubmit={submitEndorsement}>
+                      <div className="eia-field">
+                        <label htmlFor="endorsement-type">Type</label>
+                        <select
+                          id="endorsement-type"
+                          value={endorsementForm.endorsementType}
+                          onChange={(e) => updateEndorsement('endorsementType', e.target.value)}
+                        >
+                          {['COVERAGE', 'LIMIT', 'PARTY', 'PREMIUM', 'RETENTION', 'EXCLUSION',
+                            'TERRITORY', 'CORRECTION', 'MANUSCRIPT'].map((type) => (
+                            <option key={type} value={type}>{type}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="endorsement-effective-date">Effective date</label>
+                        <input
+                          id="endorsement-effective-date"
+                          type="date"
+                          value={endorsementForm.effectiveDate}
+                          onChange={(e) => updateEndorsement('effectiveDate', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="endorsement-description">Description</label>
+                        <input
+                          id="endorsement-description"
+                          value={endorsementForm.description}
+                          onChange={(e) => updateEndorsement('description', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="endorsement-premium-delta">Premium delta</label>
+                        <input
+                          id="endorsement-premium-delta"
+                          type="number"
+                          step="0.01"
+                          value={endorsementForm.premiumDeltaAmount}
+                          onChange={(e) => updateEndorsement('premiumDeltaAmount', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="endorsement-delta-currency">Delta currency</label>
+                        <input
+                          id="endorsement-delta-currency"
+                          maxLength={3}
+                          value={endorsementForm.premiumDeltaCurrency}
+                          onChange={(e) => updateEndorsement('premiumDeltaCurrency', e.target.value.toUpperCase())}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="endorsement-coverage-impact">Coverage impact</label>
+                        <select
+                          id="endorsement-coverage-impact"
+                          value={endorsementForm.coverageImpact}
+                          onChange={(e) => updateEndorsement('coverageImpact', e.target.value)}
+                        >
+                          {['NONE', 'BROADEN', 'RESTRICT', 'CLARIFY'].map((impact) => (
+                            <option key={impact} value={impact}>{impact}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="endorsement-backdate-reason">Backdate reason (required before inception)</label>
+                        <input
+                          id="endorsement-backdate-reason"
+                          value={endorsementForm.backdateReason}
+                          onChange={(e) => updateEndorsement('backdateReason', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="endorsement-approved-by">Approver ID</label>
+                        <input
+                          id="endorsement-approved-by"
+                          placeholder="Approver UUID"
+                          value={endorsementForm.approvedBy}
+                          onChange={(e) => updateEndorsement('approvedBy', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="endorsement-approval-ref">Approval reference</label>
+                        <input
+                          id="endorsement-approval-ref"
+                          placeholder="Approval UUID"
+                          value={endorsementForm.approvalRef}
+                          onChange={(e) => updateEndorsement('approvalRef', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <button type="submit">Add endorsement</button>
+                      </div>
+                    </form>
+                  </section>
+                </section>
+              )}
+
+              {tab === 'parties' && (
+                <section
+                  id="panel-parties"
+                  role="tabpanel"
+                  aria-labelledby="tab-parties"
+                >
+                  <div className="eia-section-title">
+                    <h2>Insureds</h2>
+                    <span className="eia-muted">
+                      {insureds.length} insured{insureds.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className="eia-table-wrap">
+                    <table className="eia-table">
+                      <thead>
+                        <tr>
+                          <th>Party</th>
+                          <th>Role</th>
+                          <th>Name</th>
+                          <th>Effective from</th>
+                          <th>Effective to</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {insureds.map((insured) => (
+                          <tr key={insured.id}>
+                            <td><code className="eia-mono">{shortId(insured.partyId)}</code></td>
+                            <td>{insured.insuredRole}</td>
+                            <td>{insured.displayName}</td>
+                            <td>{insured.effectiveFrom}</td>
+                            <td>{insured.effectiveTo}</td>
+                            <td>{insured.status}</td>
+                          </tr>
+                        ))}
+                        {insureds.length === 0 && (
+                          <tr><td className="eia-muted" colSpan={6}>No insureds yet.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <section className="eia-card" aria-label="Add insured" style={{ marginTop: 16 }}>
+                    <div className="eia-section-title" style={{ marginTop: 0 }}>
+                      <h2>Add insured</h2>
+                      <span className="eia-muted">Party owns the identity; the policy references it</span>
+                    </div>
+                    <form className="eia-form-grid" onSubmit={submitInsured}>
+                      <div className="eia-field">
+                        <label htmlFor="insured-party-id">Party ID</label>
+                        <input
+                          id="insured-party-id"
+                          placeholder="Party UUID"
+                          value={insuredForm.partyId}
+                          onChange={(e) => updateInsured('partyId', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="insured-role">Role</label>
+                        <select
+                          id="insured-role"
+                          value={insuredForm.insuredRole}
+                          onChange={(e) => updateInsured('insuredRole', e.target.value)}
+                        >
+                          {['NAMED_INSURED', 'ADDITIONAL_INSURED', 'INSURED_ORGANIZATION', 'LOSS_PAYEE',
+                            'MORTGAGEE', 'LENDER', 'CERTIFICATE_HOLDER'].map((role) => (
+                            <option key={role} value={role}>{role}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="insured-display-name">Display name</label>
+                        <input
+                          id="insured-display-name"
+                          value={insuredForm.displayName}
+                          onChange={(e) => updateInsured('displayName', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="insured-certificate-number">Certificate number</label>
+                        <input
+                          id="insured-certificate-number"
+                          value={insuredForm.certificateNumber}
+                          onChange={(e) => updateInsured('certificateNumber', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="insured-effective-from">Effective from</label>
+                        <input
+                          id="insured-effective-from"
+                          type="date"
+                          value={insuredForm.effectiveFrom}
+                          onChange={(e) => updateInsured('effectiveFrom', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="insured-effective-to">Effective to</label>
+                        <input
+                          id="insured-effective-to"
+                          type="date"
+                          value={insuredForm.effectiveTo}
+                          onChange={(e) => updateInsured('effectiveTo', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <button type="submit">Add insured</button>
+                      </div>
+                    </form>
+                  </section>
+
+                  <div className="eia-section-title">
+                    <h2>Locations</h2>
+                    <span className="eia-muted">
+                      {locations.length} location{locations.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className="eia-table-wrap">
+                    <table className="eia-table">
+                      <thead>
+                        <tr>
+                          <th>Code</th>
+                          <th>Address</th>
+                          <th>City</th>
+                          <th>State</th>
+                          <th>Country</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {locations.map((location) => (
+                          <tr key={location.id}>
+                            <td>{location.locationCode}</td>
+                            <td>{location.addressLine1}</td>
+                            <td>{location.city}</td>
+                            <td>{location.stateRegion}</td>
+                            <td>{location.country}</td>
+                            <td>{location.status}</td>
+                          </tr>
+                        ))}
+                        {locations.length === 0 && (
+                          <tr><td className="eia-muted" colSpan={6}>No locations yet.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <section className="eia-card" aria-label="Add location" style={{ marginTop: 16 }}>
+                    <div className="eia-section-title" style={{ marginTop: 0 }}>
+                      <h2>Add location</h2>
+                    </div>
+                    <form className="eia-form-grid" onSubmit={submitLocation}>
+                      <div className="eia-field">
+                        <label htmlFor="location-code">Location code</label>
+                        <input
+                          id="location-code"
+                          value={locationForm.locationCode}
+                          onChange={(e) => updateLocation('locationCode', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field span-2">
+                        <label htmlFor="location-address-line-1">Address line 1</label>
+                        <input
+                          id="location-address-line-1"
+                          value={locationForm.addressLine1}
+                          onChange={(e) => updateLocation('addressLine1', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="location-city">City</label>
+                        <input
+                          id="location-city"
+                          value={locationForm.city}
+                          onChange={(e) => updateLocation('city', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="location-state-region">State / region</label>
+                        <input
+                          id="location-state-region"
+                          placeholder="US-OH"
+                          value={locationForm.stateRegion}
+                          onChange={(e) => updateLocation('stateRegion', e.target.value.toUpperCase())}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="location-postal-code">Postal code</label>
+                        <input
+                          id="location-postal-code"
+                          value={locationForm.postalCode}
+                          onChange={(e) => updateLocation('postalCode', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="location-country">Country</label>
+                        <input
+                          id="location-country"
+                          maxLength={3}
+                          value={locationForm.country}
+                          onChange={(e) => updateLocation('country', e.target.value.toUpperCase())}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="location-effective-from">Effective from</label>
+                        <input
+                          id="location-effective-from"
+                          type="date"
+                          value={locationForm.effectiveFrom}
+                          onChange={(e) => updateLocation('effectiveFrom', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="location-effective-to">Effective to</label>
+                        <input
+                          id="location-effective-to"
+                          type="date"
+                          value={locationForm.effectiveTo}
+                          onChange={(e) => updateLocation('effectiveTo', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <button type="submit">Add location</button>
+                      </div>
+                    </form>
+                  </section>
+                </section>
+              )}
+
+              {tab === 'cancellation' && (
+                <section
+                  id="panel-cancellation"
+                  role="tabpanel"
+                  aria-labelledby="tab-cancellation"
+                >
+                  <div className="eia-section-title">
+                    <h2>Cancellations</h2>
+                    <span className="eia-muted">
+                      {cancellations.length} cancellation{cancellations.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className="eia-table-wrap">
+                    <table className="eia-table">
+                      <thead>
+                        <tr>
+                          <th>Type</th>
+                          <th>Reason</th>
+                          <th>Effective</th>
+                          <th>Return premium</th>
+                          <th>Pro-rata</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cancellations.map((cancellation) => (
+                          <tr key={cancellation.id}>
+                            <td>{cancellation.cancellationType}</td>
+                            <td>{cancellation.reason}</td>
+                            <td>{cancellation.effectiveDate}</td>
+                            <td>{formatMoney(cancellation.returnPremiumAmount, cancellation.premiumCurrency)}</td>
+                            <td>{formatPercent(cancellation.proRataPct)}</td>
+                            <td>{cancellation.status}</td>
+                          </tr>
+                        ))}
+                        {cancellations.length === 0 && (
+                          <tr><td className="eia-muted" colSpan={6}>No cancellations.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <section className="eia-card" aria-label="Cancel policy" style={{ marginTop: 16 }}>
+                    <div className="eia-section-title" style={{ marginTop: 0 }}>
+                      <h2>Cancel policy</h2>
+                      <span className="eia-muted">Posts the cancellation with the current ETag</span>
+                    </div>
+                    <form className="eia-form-grid" onSubmit={submitCancel}>
+                      <div className="eia-field">
+                        <label htmlFor="cancel-type">Cancellation type</label>
+                        <select
+                          id="cancel-type"
+                          value={cancelForm.cancellationType}
+                          onChange={(e) => updateCancel('cancellationType', e.target.value)}
+                        >
+                          {['PRO_RATA', 'FLAT', 'SHORT_RATE', 'NON_PAYMENT', 'VOID'].map((type) => (
+                            <option key={type} value={type}>{type}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="eia-field span-2">
+                        <label htmlFor="cancel-reason">Reason</label>
+                        <input
+                          id="cancel-reason"
+                          value={cancelForm.reason}
+                          onChange={(e) => updateCancel('reason', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="cancel-effective-date">Effective date</label>
+                        <input
+                          id="cancel-effective-date"
+                          type="date"
+                          value={cancelForm.effectiveDate}
+                          onChange={(e) => updateCancel('effectiveDate', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="cancel-notice-days">Notice days</label>
+                        <input
+                          id="cancel-notice-days"
+                          type="number"
+                          min="0"
+                          value={cancelForm.noticeDays}
+                          onChange={(e) => updateCancel('noticeDays', e.target.value)}
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <button type="submit">Cancel policy</button>
+                      </div>
+                    </form>
+                  </section>
+
+                  <div className="eia-section-title">
+                    <h2>Reinstatements</h2>
+                    <span className="eia-muted">
+                      {reinstatements.length} reinstatement{reinstatements.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className="eia-table-wrap">
+                    <table className="eia-table">
+                      <thead>
+                        <tr>
+                          <th>Effective</th>
+                          <th>Reason</th>
+                          <th>Premium evidence</th>
+                          <th>Amount</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reinstatements.map((reinstatement) => (
+                          <tr key={reinstatement.id}>
+                            <td>{reinstatement.effectiveDate}</td>
+                            <td>{reinstatement.reason}</td>
+                            <td>{reinstatement.premiumEvidenceRef}</td>
+                            <td>{formatMoney(reinstatement.premiumEvidenceAmount, reinstatement.premiumEvidenceCurrency)}</td>
+                            <td>{reinstatement.status}</td>
+                          </tr>
+                        ))}
+                        {reinstatements.length === 0 && (
+                          <tr><td className="eia-muted" colSpan={5}>No reinstatements.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <section className="eia-card" aria-label="Reinstate policy" style={{ marginTop: 16 }}>
+                    <div className="eia-section-title" style={{ marginTop: 0 }}>
+                      <h2>Reinstate policy</h2>
+                      <span className="eia-muted">Requires approval and premium evidence</span>
+                    </div>
+                    <form className="eia-form-grid" onSubmit={submitReinstate}>
+                      <div className="eia-field">
+                        <label htmlFor="reinstate-effective-date">Effective date</label>
+                        <input
+                          id="reinstate-effective-date"
+                          type="date"
+                          value={reinstateForm.effectiveDate}
+                          onChange={(e) => updateReinstate('effectiveDate', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field span-2">
+                        <label htmlFor="reinstate-reason">Reason</label>
+                        <input
+                          id="reinstate-reason"
+                          value={reinstateForm.reason}
+                          onChange={(e) => updateReinstate('reason', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="reinstate-approved-by">Approver ID</label>
+                        <input
+                          id="reinstate-approved-by"
+                          placeholder="Approver UUID"
+                          value={reinstateForm.approvedBy}
+                          onChange={(e) => updateReinstate('approvedBy', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="reinstate-approval-ref">Approval reference</label>
+                        <input
+                          id="reinstate-approval-ref"
+                          placeholder="Approval UUID"
+                          value={reinstateForm.approvalRef}
+                          onChange={(e) => updateReinstate('approvalRef', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="reinstate-premium-evidence-ref">Premium evidence reference</label>
+                        <input
+                          id="reinstate-premium-evidence-ref"
+                          value={reinstateForm.premiumEvidenceRef}
+                          onChange={(e) => updateReinstate('premiumEvidenceRef', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="reinstate-evidence-amount">Evidence amount</label>
+                        <input
+                          id="reinstate-evidence-amount"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={reinstateForm.premiumEvidenceAmount}
+                          onChange={(e) => updateReinstate('premiumEvidenceAmount', e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="reinstate-evidence-currency">Evidence currency</label>
+                        <input
+                          id="reinstate-evidence-currency"
+                          maxLength={3}
+                          value={reinstateForm.premiumEvidenceCurrency}
+                          onChange={(e) => updateReinstate('premiumEvidenceCurrency', e.target.value.toUpperCase())}
+                          required
+                        />
+                      </div>
+                      <div className="eia-field">
+                        <button type="submit">Reinstate policy</button>
+                      </div>
+                    </form>
+                  </section>
+                </section>
+              )}
+            </>
+          )}
+        </section>
+      </div>
+    </main>
   );
 }
 
@@ -1505,34 +2010,4 @@ function defaultReinstateForm() {
     premiumEvidenceAmount: '1500.00',
     premiumEvidenceCurrency: 'USD'
   };
-}
-
-const gridStyle = { display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' };
-const definitionGridStyle = { display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', margin: '14px 0' };
-const labelStyle = { display: 'grid', gap: 4, fontSize: 13, fontWeight: 600, color: '#333' };
-const inputStyle = { padding: '8px 10px', border: '1px solid #bbb', borderRadius: 6, fontSize: 14, fontWeight: 400 };
-const buttonStyle = { padding: '9px 16px', border: 0, borderRadius: 6, background: '#0b5fff', color: 'white', fontWeight: 600, cursor: 'pointer' };
-const linkButtonStyle = { padding: '4px 10px', border: '1px solid #0b5fff', borderRadius: 6, background: 'white', color: '#0b5fff', fontWeight: 600, cursor: 'pointer' };
-const tableStyle = { borderCollapse: 'collapse', fontSize: 13, marginBottom: 14 };
-const headRowStyle = { textAlign: 'left', borderBottom: '2px solid #ddd' };
-const emptyCellStyle = { padding: 12, color: '#666' };
-const activeTabStyle = { padding: '7px 12px', border: '1px solid #0b5fff', borderRadius: 999, background: '#0b5fff', color: 'white', fontWeight: 600, cursor: 'pointer' };
-const inactiveTabStyle = { padding: '7px 12px', border: '1px solid #bbb', borderRadius: 999, background: 'white', color: '#333', fontWeight: 600, cursor: 'pointer' };
-
-function statusStyle(status) {
-  const colors = {
-    DRAFT: ['#eee', '#333'],
-    QUOTED: ['#e8f0ff', '#0b3d91'],
-    BOUND: ['#fff4d6', '#7a5300'],
-    ISSUED: ['#e6f4ea', '#1e6b35'],
-    IN_FORCE: ['#d7f5e0', '#145c2c'],
-    ENDORSED: ['#ede7ff', '#4b2ba8'],
-    CANCELLED: ['#fde8e8', '#a11717'],
-    REINSTATED: ['#e6f4ea', '#1e6b35'],
-    EXPIRED: ['#ececec', '#555'],
-    NON_RENEWED: ['#fde8e8', '#a11717'],
-    VOID: ['#f3d6d6', '#7a0000']
-  };
-  const [background, color] = colors[status] || ['#eee', '#333'];
-  return { background, color, borderRadius: 999, padding: '2px 9px', fontSize: 12, fontWeight: 700 };
 }

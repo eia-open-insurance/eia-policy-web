@@ -95,6 +95,15 @@ function statusTone(status) {
   return 'blue';
 }
 
+function documentStatusTone(status) {
+  if (['ACTIVE', 'CLASSIFIED'].includes(status)) return 'green';
+  if (['REJECTED', 'FAILED', 'DISPOSED'].includes(status)) return 'red';
+  if (['PENDING_UPLOAD', 'RECEIVED', 'SCANNING', 'PROCESSING', 'ON_HOLD'].includes(status)) {
+    return 'amber';
+  }
+  return 'blue';
+}
+
 function readJson(response) {
   return response.json().catch(() => null);
 }
@@ -208,6 +217,8 @@ export default function App() {
   const [partyLabels, setPartyLabels] = useState({});
   const [related, setRelated] = useState({ claims: [], cessions: [], loading: false, error: '' });
   const relatedRequestRef = useRef(0);
+  const [documents, setDocuments] = useState({ items: [], loading: false, error: '' });
+  const documentsRequestRef = useRef(0);
 
   const [selected, setSelected] = useState(null);
   const [tab, setTab] = useState('overview');
@@ -412,6 +423,7 @@ export default function App() {
         etag: detail.etag || formatEtag(detail.body.version)
       });
       loadRelated(policyId).catch(() => {});
+      loadDocuments(policyId).catch(() => {});
       if (!options.keepTab) setTab('overview');
       await loadCurrentVersion(policyId);
       setVersions([]);
@@ -475,6 +487,48 @@ export default function App() {
   function clearRelated() {
     relatedRequestRef.current += 1;
     setRelated({ claims: [], cessions: [], loading: false, error: '' });
+  }
+
+  /**
+   * Linked documents are evidence, not policy facts. The lookup is independent
+   * of the record read: a failure stays inside the card and never blocks the
+   * policy itself.
+   */
+  async function loadDocuments(policyId) {
+    const requestId = documentsRequestRef.current + 1;
+    documentsRequestRef.current = requestId;
+    if (!policyId) {
+      setDocuments({ items: [], loading: false, error: '' });
+      return;
+    }
+    setDocuments({ items: [], loading: true, error: '' });
+    try {
+      const result = await api(
+        `/api/v1/documents?linkedType=POLICY&linkedId=${encodeURIComponent(policyId)}`
+      );
+      if (documentsRequestRef.current !== requestId) return;
+      if (!result.response.ok) {
+        setDocuments({
+          items: [],
+          loading: false,
+          error: 'Linked documents are temporarily unavailable.'
+        });
+        return;
+      }
+      setDocuments({ items: pageItems(result.body), loading: false, error: '' });
+    } catch {
+      if (documentsRequestRef.current !== requestId) return;
+      setDocuments({
+        items: [],
+        loading: false,
+        error: 'Linked documents are temporarily unavailable.'
+      });
+    }
+  }
+
+  function clearDocuments() {
+    documentsRequestRef.current += 1;
+    setDocuments({ items: [], loading: false, error: '' });
   }
 
   async function loadTabData(tabId, policyId = selected?.id) {
@@ -561,6 +615,7 @@ export default function App() {
     setTab('overview');
     setCurrentVersion(null);
     clearRelated();
+    clearDocuments();
   }
 
   async function refreshWorkspace() {
@@ -1288,6 +1343,76 @@ export default function App() {
                           </>
                         )}
                       </>
+                    )}
+                  </section>
+
+                  <section
+                    className="eia-card"
+                    aria-label="Linked documents"
+                    data-testid="linked-documents"
+                    style={{ marginTop: 14 }}
+                  >
+                    <div className="eia-section-title" style={{ marginTop: 0 }}>
+                      <h3>Documents</h3>
+                      <span className="eia-badge" data-testid="linked-documents-count">
+                        {documents.loading
+                          ? '…'
+                          : `${documents.items.length} ${documents.items.length === 1 ? 'document' : 'documents'}`}
+                      </span>
+                    </div>
+                    <p
+                      className="eia-muted"
+                      style={{ margin: '4px 0 0' }}
+                      data-testid="documents-evidence-note"
+                    >
+                      Documents are evidence, not business facts. Open a document in the Document
+                      workspace to review its content and links.
+                    </p>
+                    {documents.loading ? (
+                      <p className="eia-muted" style={{ margin: '8px 0 0' }}>Loading documents…</p>
+                    ) : documents.error ? (
+                      <p className="eia-muted" style={{ margin: '8px 0 0' }}>{documents.error}</p>
+                    ) : documents.items.length === 0 ? (
+                      <p className="eia-muted" style={{ margin: '8px 0 0' }}>
+                        No documents are linked to this policy.
+                      </p>
+                    ) : (
+                      <div className="eia-table-wrap" style={{ marginTop: 10 }}>
+                        <table className="eia-table">
+                          <thead>
+                            <tr>
+                              <th>Document number</th>
+                              <th>Title</th>
+                              <th>Type</th>
+                              <th>Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {documents.items.map((document, index) => (
+                              <tr key={document.id || document.documentNumber || `document-${index}`}>
+                                <td>
+                                  {document.id ? (
+                                    <CrossLink
+                                      className="eia-mono"
+                                      href={`/document?record=${encodeURIComponent(document.id)}`}
+                                      title={`Open document ${document.documentNumber || document.id}`}
+                                    >
+                                      {document.documentNumber || 'Document'}
+                                    </CrossLink>
+                                  ) : (document.documentNumber || '—')}
+                                </td>
+                                <td>{document.title || '—'}</td>
+                                <td>{document.documentType || document.type || '—'}</td>
+                                <td>
+                                  <span className={`eia-pill ${documentStatusTone(document.status)}`}>
+                                    {document.status || '—'}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     )}
                   </section>
                 </section>

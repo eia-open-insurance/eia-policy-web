@@ -234,7 +234,7 @@ body {
 }
 
 .eia-tabs button:hover,
-.eia-tab:hover { color: var(--eia-blue) !important; }
+.eia-tab:hover { background: transparent !important; color: var(--eia-blue) !important; border-bottom-color: #b9cde0 !important; }
 .eia-tabs button.active,
 .eia-tab.active { color: var(--eia-navy) !important; border-bottom-color: var(--eia-blue) !important; }
 
@@ -526,3 +526,4 @@ main [role="status"] {
   .eia-summary-grid, .eia-form-grid { grid-template-columns: 1fr; }
   .eia-form-grid .span-2, .eia-form-grid .span-3 { grid-column: auto; }
 }
+

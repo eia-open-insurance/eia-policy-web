@@ -981,3 +981,77 @@ a.eia-btn-secondary.eia-billing-payment-link {
   white-space: nowrap;
 }
 .eia-context-panel p + p { margin-top: 6px; }
+
+/* Policy renewal: a modal that creates the next term as a new record. */
+.eia-renew-action { display: inline-flex; }
+.eia-renew-action button:disabled { cursor: not-allowed; }
+
+.eia-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+  overflow-y: auto;
+  background: rgba(11, 46, 79, .55);
+}
+
+.eia-modal {
+  width: min(760px, 100%);
+  padding: 20px 22px 22px;
+  background: #fff;
+  border: 1px solid var(--eia-line);
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(8, 28, 48, .28);
+}
+
+.eia-modal h2 { margin: 0 !important; font-size: 19px !important; color: var(--eia-navy); }
+.eia-modal .eia-form-grid { align-items: start; }
+.eia-modal-lede {
+  margin: 6px 0 0;
+  color: var(--eia-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.eia-modal-currency-context { margin: 3px 0 14px; font-size: 11px; }
+.eia-modal-error {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid #e6bcbc;
+  border-radius: 5px;
+  background: #fff6f6;
+  color: var(--eia-red);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.eia-field-hint { color: var(--eia-muted); font-size: 10px; line-height: 1.35; }
+.eia-renewal-carry-note {
+  display: block;
+  margin: 2px 0 0;
+  padding: 9px 11px;
+  border: 1px solid #dce7f0;
+  border-radius: 5px;
+  background: #f7fafc;
+  color: #496074;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.eia-renewal-carry-note b { color: var(--eia-navy); }
+.eia-modal-actions {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .eia-modal-backdrop { padding: 16px 10px; }
+  .eia-modal { padding: 16px; }
+  .eia-modal .eia-form-grid { grid-template-columns: 1fr; }
+  .eia-modal .eia-form-grid .span-2,
+  .eia-modal .eia-form-grid .span-3 { grid-column: auto; }
+  .eia-modal-actions { justify-content: flex-start; }
+}

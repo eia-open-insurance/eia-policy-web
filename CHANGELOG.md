@@ -43,6 +43,22 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   disbursement and approval, and a plan does not change policy coverage.
 - Playwright coverage for plan creation payload, summary, mark paid/waive
   payloads, overdue state, Payment URL, read failure, and 409 conflicts.
+- Renewal action in the policy record header for `ISSUED`, `IN_FORCE`,
+  `ENDORSED`, and `REINSTATED` policies; other statuses render it disabled with
+  the reason as context.
+- Renewal modal with the day-after-expiration effective date, a one-year term,
+  current premium/limit/currencies as editable defaults, and a carry-forward
+  note for coverages and limits.
+- `POST /api/v1/policies/{policyId}/renew` submission with `If-Match` and
+  `Idempotency-Key`; success refreshes the queue, selects the new policy, and
+  announces `Renewed as POL-…`.
+- `renewedFromPolicyId` record fact on the successor: `Renewed from POL-…` links
+  to `/policy?record=<predecessorId>`. No successor link is rendered on the
+  predecessor because the response does not identify it.
+- Renewal context panel stating that a renewal creates a new policy record and
+  the prior policy remains intact.
+- Playwright coverage for renewal eligibility, modal defaults, POST payload and
+  headers, success selection/notice, predecessor link, and 409 conflict.
 
 ### Changed
 

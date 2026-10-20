@@ -8,6 +8,21 @@ detail with tabs for versions, coverages and limits, endorsements, insureds and
 locations, billing, cancellation/reinstatement, and an event-derived activity
 timeline.
 
+Renewal is a record-header action available while the policy is `ISSUED`,
+`IN_FORCE`, `ENDORSED`, or `REINSTATED`; every other status renders it disabled
+with the reason in its tooltip and context. The modal defaults the effective date
+to the day after the expiring policy, the expiration to a one-year term from that
+effective date, and premium, limit, and currencies to the current policy. All
+fields stay editable, and the modal states that coverages and limits are carried
+forward. `POST /api/v1/policies/{policyId}/renew` sends
+`{effectiveDate, expirationDate, premiumAmount, premiumCurrency, limitAmount,
+limitCurrency}` with the selected policy ETag as `If-Match` and a fresh
+`Idempotency-Key`. On success the queue is refreshed, the new policy is selected,
+and the notice reads `Renewed as POL-…`. The successor shows
+`Renewed from POL-…` linking to `/policy?record=<predecessorId>`; the
+predecessor payload does not identify its successor, so no forward link is
+rendered.
+
 Billing owns the premium collection plan only. `GET /billing` is treated as an
 empty state on 404; a plan is rendered as a summary (total premium, paid,
 outstanding, overdue) and an installment table. `POST /billing` sends
@@ -36,7 +51,10 @@ version.
 
 `src/billing.js` holds the pure billing helpers: plan form defaults and payload,
 form validation, tolerant normalization of the billing read (plan, installments,
-summary), status/action rules, and the Payment hand-off URL.
+summary), status/action rules, and the Payment hand-off URL. `src/renewal.js`
+holds the pure renewal helpers: status eligibility and context, UTC-safe date
+arithmetic, the term/premium form defaults, payload construction, and
+validation.
 
 No business rule is duplicated in the remote; canonical problems from the domain
 are rendered with their field errors.
@@ -58,11 +76,18 @@ endorsement, the new version row, and the `428 APPROVAL_REQUIRED` problem;
 header, newest-first rendering, empty and 503-contained states, selection
 refetch, card refresh, and payload summaries; `tests/billing.spec.js` covers the
 plan payload, policy premium context, summary, mark paid/waive PATCH payloads,
-overdue rows, the Payment hand-off URL, read failures, and 409 conflicts.
+overdue rows, the Payment hand-off URL, read failures, and 409 conflicts;
+`tests/renewal.spec.js` covers action eligibility by status, modal term and
+premium/limit defaults, the renewal payload and headers, success selection and
+notice, the predecessor link and its navigation, and the 409 conflict.
 
 ## Known SPEC gaps in this slice
 
-- No routing or deep links; the detail is an in-page panel.
+- Routing covers only the `?record=` and `?new=1` cross-links; there are no
+  per-section deep links.
+- The predecessor policy cannot render a forward link to its successor because
+  `PolicyDto` exposes only `renewedFromPolicyId`; the link is kept on the
+  successor record.
 - No document, occurrence, mass tort, claims, or reinsurance views.
 - The Billing tab covers the premium installment plan only; billing accounts,
   receivables, dunning, credit notes, commission statements, and disputes are

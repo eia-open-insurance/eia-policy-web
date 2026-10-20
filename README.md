@@ -50,6 +50,17 @@ Opening a policy shows a record detail with tabs:
 - **Cancellation** — cancellation history with the computed return premium, a
   cancel form, and a reinstatement form that requires approval and premium
   evidence.
+- **Renewal** — a record-header **Renew** action for `ISSUED`, `IN_FORCE`,
+  `ENDORSED`, and `REINSTATED` policies (disabled with the reason otherwise).
+  The modal defaults the effective date to the day after the current expiration,
+  the expiration to a one-year term, and premium/limit/currencies to the current
+  policy; all fields stay editable and the modal notes that coverages and limits
+  are carried forward. Submitting posts
+  `POST /api/v1/policies/{policyId}/renew` with `If-Match` and
+  `Idempotency-Key`, refreshes the queue, selects the new record, and announces
+  `Renewed as POL-…`. The successor shows `Renewed from POL-…` as a link to
+  `/policy?record=<predecessorId>`; the predecessor response does not know its
+  successor, so no forward link is rendered.
 - **Activity** — the record's event-derived, append-only timeline, newest first,
   with event status and concise payload facts. It reads
   `GET /api/v1/events/aggregate/{policyId}?limit=50` with `X-EIA-Tenant`, loads
@@ -73,7 +84,7 @@ npm run build
 npm test
 ```
 
-`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, and `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, the Payment hand-off URL, and 409 conflicts. `@swc/core` is pinned to `1.10.7`.
+`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, the Payment hand-off URL, and 409 conflicts, and `tests/renewal.spec.js` covers the action's status eligibility, modal term/premium defaults, renewal payload and headers, success selection/notice, the predecessor link, and the 409 conflict. `@swc/core` is pinned to `1.10.7`.
 
 ## Responsibilities
 

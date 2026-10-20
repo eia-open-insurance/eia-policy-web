@@ -16,6 +16,14 @@ import {
   validateBillingForm
 } from './billing.js';
 import { partyEndpoint, partyRecordLabel } from './party.js';
+import {
+  addYears,
+  defaultRenewalForm,
+  isRenewable,
+  renewalPayload,
+  renewalUnavailableReason,
+  validateRenewalForm
+} from './renewal.js';
 
 const TENANT = '11111111-1111-7111-8111-111111111111';
 const PAGE_SIZE = 20;
@@ -263,6 +271,11 @@ export default function App() {
   const [locationForm, setLocationForm] = useState(() => defaultLocationForm(null));
   const [cancelForm, setCancelForm] = useState(defaultCancelForm);
   const [reinstateForm, setReinstateForm] = useState(defaultReinstateForm);
+  const [renewOpen, setRenewOpen] = useState(false);
+  const [renewForm, setRenewForm] = useState(() => defaultRenewalForm(null));
+  const [renewBusy, setRenewBusy] = useState(false);
+  const [renewError, setRenewError] = useState('');
+  const [renewedFrom, setRenewedFrom] = useState(null);
   const [billingForm, setBillingForm] = useState(() => defaultBillingForm(null));
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingInstallmentId, setBillingInstallmentId] = useState(null);
@@ -433,6 +446,8 @@ export default function App() {
 
   async function openPolicy(policyId, options = {}) {
     setError('');
+    setRenewOpen(false);
+    setRenewError('');
     if (!options.silent) setNotice('');
     setTabLoading(true);
     try {
@@ -744,6 +759,9 @@ export default function App() {
     setSelected(null);
     setTab('overview');
     setCurrentVersion(null);
+    setRenewOpen(false);
+    setRenewError('');
+    setRenewedFrom(null);
     clearRelated();
     clearDocuments();
     clearActivity();
@@ -988,6 +1006,84 @@ export default function App() {
     await refreshSelected(result.etag);
   }
 
+  // ---- renewal ------------------------------------------------------
+  function openRenewal() {
+    if (!selectedPolicy || !isRenewable(selectedPolicy.status)) return;
+    setError('');
+    setNotice('');
+    setRenewError('');
+    setRenewForm(defaultRenewalForm(selectedPolicy));
+    setRenewOpen(true);
+  }
+
+  function closeRenewal() {
+    if (renewBusy) return;
+    setRenewOpen(false);
+    setRenewError('');
+  }
+
+  function updateRenewal(field, value) {
+    setRenewForm((current) => {
+      const next = { ...current, [field]: value };
+      // The one-year term follows the effective date until the operator edits
+      // the expiration date themselves.
+      if (field === 'effectiveDate' && current.expirationDate === addYears(current.effectiveDate, 1)) {
+        next.expirationDate = addYears(value, 1) || current.expirationDate;
+      }
+      return next;
+    });
+  }
+
+  async function submitRenewal(event) {
+    event.preventDefault();
+    if (!selected || !selectedPolicy || !isRenewable(selectedPolicy.status)) return;
+    setRenewError('');
+    const validation = validateRenewalForm(renewForm);
+    if (validation) {
+      setRenewError(validation);
+      return;
+    }
+    setRenewBusy(true);
+    try {
+      const result = await api(`/api/v1/policies/${selected.id}/renew`, {
+        method: 'POST',
+        body: renewalPayload(renewForm),
+        etag: selected.etag,
+        idempotencyKey: newIdempotencyKey()
+      });
+      if (!result.response.ok) {
+        setRenewError(problemMessage(result.body, `Renewal failed: ${result.response.status}`));
+        return;
+      }
+      const renewed = result.body || {};
+      setRenewOpen(false);
+      setRenewForm(defaultRenewalForm(renewed));
+      // Refresh the queue so the new record appears in the direct book, then
+      // select it. The predecessor stays in the queue unchanged.
+      await load(0);
+      if (renewed.id) {
+        await openPolicy(renewed.id, { silent: true });
+      }
+      setNotice(`Renewed as ${renewed.policyNumber || 'the new policy'}.`);
+    } catch (e) {
+      setRenewError(e.message);
+    } finally {
+      setRenewBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!renewOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !renewBusy) {
+        setRenewOpen(false);
+        setRenewError('');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [renewOpen, renewBusy]);
+
   // ---- billing plan -------------------------------------------------
   function updateBilling(field, value) {
     setBillingForm((current) => ({ ...current, [field]: value }));
@@ -1065,9 +1161,51 @@ export default function App() {
 
   const selectedPolicy = selected?.policy;
   const advanceTarget = selectedPolicy ? nextStatusFor(selectedPolicy.status) : null;
+  const renewalAllowed = selectedPolicy ? isRenewable(selectedPolicy.status) : false;
+  const renewalHint = selectedPolicy ? renewalUnavailableReason(selectedPolicy.status) : '';
+  const renewedFromPolicyId = selectedPolicy?.renewedFromPolicyId || '';
+  const renewedFromLabel = renewedFromPolicyId
+    ? ((renewedFrom?.id === renewedFromPolicyId && renewedFrom.policyNumber)
+      ? renewedFrom.policyNumber
+      : shortId(renewedFromPolicyId))
+    : '';
   const insuredPartyText = selectedPolicy?.insuredPartyId
     ? partyLabels[selectedPolicy.insuredPartyId] || shortId(selectedPolicy.insuredPartyId)
     : '—';
+
+  /**
+   * A renewal record knows its predecessor by id only. Resolve the policy
+   * number from the queue when it is already loaded and fall back to the
+   * detail read; the link target works from the id alone either way.
+   */
+  useEffect(() => {
+    if (!renewedFromPolicyId) {
+      setRenewedFrom(null);
+      return undefined;
+    }
+    const queued = policies.find((policy) => policy.id === renewedFromPolicyId);
+    if (queued?.policyNumber) {
+      setRenewedFrom({ id: renewedFromPolicyId, policyNumber: queued.policyNumber });
+      return undefined;
+    }
+    let active = true;
+    setRenewedFrom({ id: renewedFromPolicyId, policyNumber: '' });
+    api(`/api/v1/policies/${renewedFromPolicyId}`)
+      .then(({ response, body }) => {
+        if (!active) return;
+        setRenewedFrom({
+          id: renewedFromPolicyId,
+          policyNumber: response.ok && body?.policyNumber ? body.policyNumber : ''
+        });
+      })
+      .catch(() => {
+        if (active) setRenewedFrom({ id: renewedFromPolicyId, policyNumber: '' });
+      });
+    return () => {
+      active = false;
+    };
+  }, [renewedFromPolicyId, policies]);
+
   const normalizedQueueFilter = queueFilter.trim().toLowerCase();
   const filterActive = normalizedQueueFilter.length > 0;
   const visiblePolicies = filterActive
@@ -1365,8 +1503,37 @@ export default function App() {
                       </CrossLink>
                     ) : '—'}
                   </p>
+                  {renewedFromPolicyId && (
+                    <p className="eia-record-subtitle" data-testid="renewed-from">
+                      Renewed from{' '}
+                      <CrossLink
+                        href={`/policy?record=${renewedFromPolicyId}`}
+                        data-testid="renewed-from-link"
+                        title={`Open predecessor policy ${renewedFromLabel}`}
+                      >
+                        {renewedFromLabel}
+                      </CrossLink>
+                    </p>
+                  )}
                 </div>
                 <div className="eia-actions">
+                  <span
+                    className="eia-renew-action"
+                    title={renewalAllowed ? 'Create the next term as a new policy record' : renewalHint}
+                  >
+                    <button
+                      type="button"
+                      className="eia-btn-secondary"
+                      data-testid="renew-policy"
+                      onClick={openRenewal}
+                      disabled={!renewalAllowed || renewBusy}
+                      title={renewalAllowed
+                        ? 'Create the next term as a new policy record'
+                        : renewalHint}
+                    >
+                      Renew
+                    </button>
+                  </span>
                   {advanceTarget && (
                     <button
                       type="button"
@@ -2886,6 +3053,147 @@ export default function App() {
           )}
         </section>
       </div>
+
+      {renewOpen && selectedPolicy && (
+        <div className="eia-modal-backdrop">
+          <div
+            className="eia-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="renew-dialog-title"
+            aria-describedby="renew-dialog-description"
+            data-testid="renew-dialog"
+          >
+            <div className="eia-section-title" style={{ marginTop: 0 }}>
+              <h2 id="renew-dialog-title">Renew {selectedPolicy.policyNumber}</h2>
+              <span className="eia-badge">{selectedPolicy.status}</span>
+            </div>
+            <p className="eia-modal-lede" id="renew-dialog-description">
+              Create the next term as a new policy record. The expiring policy remains intact.
+            </p>
+            <p className="eia-muted eia-modal-currency-context">
+              Current term {selectedPolicy.effectiveDate || '—'} – {selectedPolicy.expirationDate || '—'}
+              {' · '}
+              {formatMoney(selectedPolicy.premiumAmount, selectedPolicy.premiumCurrency)} premium
+            </p>
+
+            {renewError && (
+              <p role="alert" data-testid="renewal-error" className="eia-modal-error">
+                {renewError}
+              </p>
+            )}
+
+            <form className="eia-form-grid" onSubmit={submitRenewal}>
+              <div className="eia-field">
+                <label htmlFor="renew-effective-date">Effective date</label>
+                <input
+                  id="renew-effective-date"
+                  type="date"
+                  value={renewForm.effectiveDate}
+                  onChange={(e) => updateRenewal('effectiveDate', e.target.value)}
+                  autoFocus
+                  required
+                />
+              </div>
+              <div className="eia-field">
+                <label htmlFor="renew-expiration-date">Expiration date</label>
+                <input
+                  id="renew-expiration-date"
+                  type="date"
+                  min={renewForm.effectiveDate || undefined}
+                  value={renewForm.expirationDate}
+                  onChange={(e) => updateRenewal('expirationDate', e.target.value)}
+                  required
+                />
+                <span className="eia-field-hint">Defaults to one year after the renewal effective date.</span>
+              </div>
+              <div className="eia-field">
+                <label htmlFor="renew-premium">Premium</label>
+                <input
+                  id="renew-premium"
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  value={renewForm.premiumAmount}
+                  onChange={(e) => updateRenewal('premiumAmount', e.target.value)}
+                  required
+                />
+              </div>
+              <div className="eia-field">
+                <label htmlFor="renew-premium-currency">Premium currency</label>
+                <input
+                  id="renew-premium-currency"
+                  maxLength={3}
+                  pattern="[A-Za-z]{3}"
+                  placeholder="USD"
+                  value={renewForm.premiumCurrency}
+                  onChange={(e) => updateRenewal('premiumCurrency', e.target.value.toUpperCase())}
+                  required
+                />
+              </div>
+              <div className="eia-field">
+                <label htmlFor="renew-limit">Limit</label>
+                <input
+                  id="renew-limit"
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  value={renewForm.limitAmount}
+                  onChange={(e) => updateRenewal('limitAmount', e.target.value)}
+                  required
+                />
+              </div>
+              <div className="eia-field">
+                <label htmlFor="renew-limit-currency">Limit currency</label>
+                <input
+                  id="renew-limit-currency"
+                  maxLength={3}
+                  pattern="[A-Za-z]{3}"
+                  placeholder="USD"
+                  value={renewForm.limitCurrency}
+                  onChange={(e) => updateRenewal('limitCurrency', e.target.value.toUpperCase())}
+                  required
+                />
+              </div>
+              <p className="eia-field span-3 eia-renewal-carry-note" data-testid="renewal-carry-forward">
+                <b>Coverages and limits are carried forward.</b> The new record keeps the current
+                coverage grants and limits; review the premium and limits for the new term before
+                creating the renewal.
+              </p>
+              <div className="eia-field span-3 eia-modal-actions">
+                <button type="submit" disabled={renewBusy}>
+                  {renewBusy ? 'Renewing…' : 'Create renewal'}
+                </button>
+                <button
+                  type="button"
+                  className="eia-btn-secondary"
+                  onClick={closeRenewal}
+                  disabled={renewBusy}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+
+            <section
+              className="eia-context-panel"
+              aria-label="Renewal context"
+              data-testid="renewal-context"
+            >
+              <h4>Renewal creates a new policy record</h4>
+              <p>
+                The new policy is selected when the domain accepts the renewal and the queue is
+                refreshed. The prior policy remains intact: its coverage, premium, versions,
+                cancellation history, and activity are unchanged.
+              </p>
+              <p>
+                The successor records <span className="eia-mono">{selectedPolicy.policyNumber}</span>
+                {' '}as its renewal source. This policy does not link forward to a successor.
+              </p>
+            </section>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

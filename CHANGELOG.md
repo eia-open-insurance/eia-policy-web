@@ -23,6 +23,9 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   that requires approval and premium evidence.
 - Playwright coverage for the coverage/limit and endorsement flows, including a
   `422 BUSINESS_RULE` and a `428 APPROVAL_REQUIRED` problem.
+- Insured-party cross-link resolution through `GET /api/v1/parties/{id}`: the
+  record header and Overview show `name · party number` link text with a
+  short-UUID fallback, and a 404 never blocks the policy record.
 
 ### Changed
 

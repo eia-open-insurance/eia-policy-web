@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockRelated, PARTY, PARTY_ID, TENANT } from './support.js';
+import { mockPartyDetail, mockRelated, PARTY, PARTY_ID, TENANT } from './support.js';
 
 const POLICY_ID = 'aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa';
 const OTHER_POLICY_ID = 'dddddddd-dddd-7ddd-8ddd-dddddddddddd';
@@ -254,6 +254,8 @@ test('links the insured party and renders related direct claims and cessions', a
   let claimsRequest = null;
   let cessionsRequest = null;
 
+  await mockPartyDetail(page);
+
   await page.route('**/api/v1/policies**', async (route) => {
     const url = new URL(route.request().url());
     if (route.request().method() !== 'GET') {
@@ -310,7 +312,9 @@ test('links the insured party and renders related direct claims and cessions', a
   await page.goto(`/?record=${POLICY_ID}`);
   await expect(page.getByRole('heading', { name: 'POL-2026-0000001' })).toBeVisible();
 
-  await expect(page.getByRole('link', { name: 'Acme Manufacturing' }))
+  await expect(page.getByTestId('record-insured-link'))
+    .toHaveText('Acme Manufacturing · PTY-000000001');
+  await expect(page.getByTestId('record-insured-link'))
     .toHaveAttribute('href', `/party?record=${PARTY_ID}`);
   await expect(page.getByRole('link', { name: /CLM-2026-0000001/ }))
     .toHaveAttribute('href', `/direct-claims?record=${CLAIM_ID}`);
@@ -328,6 +332,6 @@ test('links the insured party and renders related direct claims and cessions', a
   expect(cessionsRequest.url.searchParams.get('limit')).toBe('5');
   expect(cessionsRequest.headers['x-eia-book']).toBe('DIRECT');
 
-  await page.getByRole('link', { name: 'Acme Manufacturing' }).click();
+  await page.getByTestId('record-insured-link').click();
   await expect(page).toHaveURL(new RegExp(`/party\\?record=${PARTY_ID}$`));
 });

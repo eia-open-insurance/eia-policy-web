@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import EntityPicker from './EntityPicker.jsx';
+import { partyEndpoint, partyRecordLabel } from './party.js';
 
 const TENANT = '11111111-1111-7111-8111-111111111111';
 const PAGE_SIZE = 20;
@@ -80,8 +81,11 @@ function shortId(value) {
   return text.length > 8 ? `${text.slice(0, 8)}…` : text;
 }
 
-function insuredLabel(policy) {
-  return policy?.insuredDisplayName || shortId(policy?.insuredPartyId);
+function insuredLabel(policy, partyLabels = {}) {
+  if (!policy) return '—';
+  return partyLabels[policy.insuredPartyId]
+    || policy.insuredDisplayName
+    || shortId(policy.insuredPartyId);
 }
 
 function statusTone(status) {
@@ -126,12 +130,13 @@ function navigateTo(path) {
   }
 }
 
-function CrossLink({ href, className, title, children }) {
+function CrossLink({ href, className, title, children, ...rest }) {
   return (
     <a
       href={href}
       className={className}
       title={title}
+      {...rest}
       onClick={(event) => {
         event.preventDefault();
         navigateTo(href);
@@ -200,6 +205,7 @@ export default function App() {
   const [showCreate, setShowCreate] = useState(false);
   const [queueFilter, setQueueFilter] = useState('');
   const [insuredPartyLabel, setInsuredPartyLabel] = useState('');
+  const [partyLabels, setPartyLabels] = useState({});
   const [related, setRelated] = useState({ claims: [], cessions: [], loading: false, error: '' });
   const relatedRequestRef = useRef(0);
 
@@ -267,6 +273,35 @@ export default function App() {
       window.removeEventListener('popstate', onPopState);
     };
   }, []);
+
+  const selectedInsuredPartyId = selected?.policy?.insuredPartyId || '';
+
+  /**
+   * Resolves the insured party through the Party API after the policy record
+   * is already on screen. A 404 or an unavailable Party service never blocks
+   * rendering: the cross-link falls back to the short UUID.
+   */
+  useEffect(() => {
+    if (!selectedInsuredPartyId) return undefined;
+    let alive = true;
+    api(partyEndpoint(selectedInsuredPartyId))
+      .then(({ response, body }) => {
+        if (!alive || !response.ok || !body) return;
+        const label = partyRecordLabel(body);
+        if (!label) return;
+        setPartyLabels((current) => (
+          current[selectedInsuredPartyId] === label
+            ? current
+            : { ...current, [selectedInsuredPartyId]: label }
+        ));
+      })
+      .catch(() => {
+        // Party lookup is an enhancement; the record still renders.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedInsuredPartyId]);
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -766,6 +801,9 @@ export default function App() {
 
   const selectedPolicy = selected?.policy;
   const advanceTarget = selectedPolicy ? nextStatusFor(selectedPolicy.status) : null;
+  const insuredPartyText = selectedPolicy?.insuredPartyId
+    ? partyLabels[selectedPolicy.insuredPartyId] || shortId(selectedPolicy.insuredPartyId)
+    : '—';
   const normalizedQueueFilter = queueFilter.trim().toLowerCase();
   const filterActive = normalizedQueueFilter.length > 0;
   const visiblePolicies = filterActive
@@ -980,7 +1018,7 @@ export default function App() {
                   onClick={() => openPolicy(policy.id)}
                 >
                   <span className="record-primary">{policy.policyNumber}</span>
-                  <span className="record-secondary">Insured {insuredLabel(policy)}</span>
+                  <span className="record-secondary">Insured {insuredLabel(policy, partyLabels)}</span>
                   <span className="record-secondary">
                     {policy.productCode || '—'} · version {policy.version ?? '—'}
                   </span>
@@ -1049,6 +1087,18 @@ export default function App() {
                     Version {selectedPolicy.version ?? '—'}
                     {' · '}
                     ETag <code className="eia-mono" data-testid="policy-etag">{selected.etag}</code>
+                  </p>
+                  <p className="eia-record-subtitle">
+                    Insured{' '}
+                    {selectedPolicy.insuredPartyId ? (
+                      <CrossLink
+                        href={`/party?record=${selectedPolicy.insuredPartyId}`}
+                        data-testid="record-insured-link"
+                        title={`Open party ${selectedPolicy.insuredPartyId}`}
+                      >
+                        {insuredPartyText}
+                      </CrossLink>
+                    ) : '—'}
                   </p>
                 </div>
                 <div className="eia-actions">
@@ -1134,8 +1184,12 @@ export default function App() {
                         <dt>Insured party</dt>
                         <dd>
                           {selectedPolicy.insuredPartyId ? (
-                            <CrossLink href={`/party?record=${selectedPolicy.insuredPartyId}`}>
-                              {selectedPolicy.insuredDisplayName || selectedPolicy.insuredPartyId}
+                            <CrossLink
+                              href={`/party?record=${selectedPolicy.insuredPartyId}`}
+                              data-testid="overview-insured-link"
+                              title={`Open party ${selectedPolicy.insuredPartyId}`}
+                            >
+                              {insuredPartyText}
                             </CrossLink>
                           ) : '—'}
                         </dd>

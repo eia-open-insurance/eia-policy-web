@@ -1,7 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import EntityPicker from './EntityPicker.jsx';
 
 const TENANT = '11111111-1111-7111-8111-111111111111';
 const PAGE_SIZE = 20;
+const RELATED_LIMIT = 5;
+const QUEUE_FILTER_PLACEHOLDER = 'Filter policies by number, product, or status…';
 const NEXT_STATUS = {
   DRAFT: 'QUOTED',
   QUOTED: 'BOUND',
@@ -110,11 +113,60 @@ function newIdempotencyKey() {
   return `policy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+/**
+ * The shell owns SPA routing. Pushing history and re-broadcasting popstate keeps
+ * cross-vertical links inside the shell; a hard navigation is the last resort.
+ */
+function navigateTo(path) {
+  try {
+    window.history.pushState({}, '', path);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  } catch (e) {
+    window.location.assign(path);
+  }
+}
+
+function CrossLink({ href, className, title, children }) {
+  return (
+    <a
+      href={href}
+      className={className}
+      title={title}
+      onClick={(event) => {
+        event.preventDefault();
+        navigateTo(href);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+function searchHref(item, basePath) {
+  const href = item?.href;
+  if (typeof href === 'string' && href.startsWith('/')) return href;
+  return `${basePath}?record=${encodeURIComponent(item?.id || '')}`;
+}
+
+function isPolicyRoute() {
+  const path = window.location.pathname.replace(/\/+$/, '');
+  return path === '' || path === '/index.html' || path === '/policy';
+}
+
+function readPolicyUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    record: (params.get('record') || '').trim(),
+    create: params.get('new') === '1'
+  };
+}
+
 async function api(path, options = {}) {
   const headers = { 'X-EIA-Tenant': TENANT };
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   if (options.etag) headers['If-Match'] = options.etag;
   if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
+  if (options.book) headers['X-EIA-Book'] = options.book;
   const response = await fetch(path, {
     method: options.method || 'GET',
     headers,
@@ -146,6 +198,10 @@ export default function App() {
   const [total, setTotal] = useState(0);
   const [links, setLinks] = useState({});
   const [showCreate, setShowCreate] = useState(false);
+  const [queueFilter, setQueueFilter] = useState('');
+  const [insuredPartyLabel, setInsuredPartyLabel] = useState('');
+  const [related, setRelated] = useState({ claims: [], cessions: [], loading: false, error: '' });
+  const relatedRequestRef = useRef(0);
 
   const [selected, setSelected] = useState(null);
   const [tab, setTab] = useState('overview');
@@ -192,7 +248,24 @@ export default function App() {
   }
 
   useEffect(() => {
-    load(0).catch((e) => setError(e.message));
+    let active = true;
+    const applyUrl = async (reload) => {
+      if (reload) await load(0);
+      if (!active || !isPolicyRoute()) return;
+      const { record, create } = readPolicyUrl();
+      setShowCreate(create);
+      if (record) await openPolicy(record);
+      else closeSelected();
+    };
+    applyUrl(true).catch((e) => setError(e.message));
+    const onPopState = () => {
+      applyUrl(false).catch((e) => setError(e.message));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      active = false;
+      window.removeEventListener('popstate', onPopState);
+    };
   }, []);
 
   function update(field, value) {
@@ -203,6 +276,10 @@ export default function App() {
     event.preventDefault();
     setError('');
     setNotice('');
+    if (!form.insuredPartyId) {
+      setError('Select an insured party before creating the policy.');
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -299,6 +376,7 @@ export default function App() {
         policy: detail.body,
         etag: detail.etag || formatEtag(detail.body.version)
       });
+      loadRelated(policyId).catch(() => {});
       if (!options.keepTab) setTab('overview');
       await loadCurrentVersion(policyId);
       setVersions([]);
@@ -330,6 +408,38 @@ export default function App() {
     } else {
       setCurrentVersion(null);
     }
+  }
+
+  async function loadRelated(policyId) {
+    if (!policyId) return;
+    const requestId = relatedRequestRef.current + 1;
+    relatedRequestRef.current = requestId;
+    setRelated({ claims: [], cessions: [], loading: true, error: '' });
+    const query = encodeURIComponent(policyId);
+    const [claimsResult, cessionsResult] = await Promise.allSettled([
+      api(`/api/v1/claims/search?q=${query}&limit=${RELATED_LIMIT}`, { book: 'DIRECT' }),
+      api(`/api/v1/cessions/search?q=${query}&limit=${RELATED_LIMIT}`, { book: 'DIRECT' })
+    ]);
+    if (relatedRequestRef.current !== requestId) return;
+    const claims = claimsResult.status === 'fulfilled' && claimsResult.value.response.ok
+      ? pageItems(claimsResult.value.body)
+      : [];
+    const cessions = cessionsResult.status === 'fulfilled' && cessionsResult.value.response.ok
+      ? pageItems(cessionsResult.value.body)
+      : [];
+    const bothFailed = (claimsResult.status !== 'fulfilled' || !claimsResult.value.response.ok)
+      && (cessionsResult.status !== 'fulfilled' || !cessionsResult.value.response.ok);
+    setRelated({
+      claims,
+      cessions,
+      loading: false,
+      error: bothFailed ? 'Related records are temporarily unavailable.' : ''
+    });
+  }
+
+  function clearRelated() {
+    relatedRequestRef.current += 1;
+    setRelated({ claims: [], cessions: [], loading: false, error: '' });
   }
 
   async function loadTabData(tabId, policyId = selected?.id) {
@@ -415,6 +525,7 @@ export default function App() {
     setSelected(null);
     setTab('overview');
     setCurrentVersion(null);
+    clearRelated();
   }
 
   async function refreshWorkspace() {
@@ -655,6 +766,12 @@ export default function App() {
 
   const selectedPolicy = selected?.policy;
   const advanceTarget = selectedPolicy ? nextStatusFor(selectedPolicy.status) : null;
+  const normalizedQueueFilter = queueFilter.trim().toLowerCase();
+  const filterActive = normalizedQueueFilter.length > 0;
+  const visiblePolicies = filterActive
+    ? policies.filter((policy) => [policy.policyNumber, policy.productCode, policy.status]
+      .some((value) => String(value || '').toLowerCase().includes(normalizedQueueFilter)))
+    : policies;
 
   return (
     <main>
@@ -714,15 +831,34 @@ export default function App() {
               />
             </div>
             <div className="eia-field span-2">
-              <label htmlFor="create-insured-party">Insured party ID</label>
-              <input
-                id="create-insured-party"
-                placeholder="Insured party ID (UUID)"
+              <label>Insured party</label>
+              <EntityPicker
+                endpoint="/api/v1/parties/search"
                 value={form.insuredPartyId}
-                onChange={(e) => update('insuredPartyId', e.target.value)}
-                required
+                valueLabel={insuredPartyLabel}
+                onChange={(id, item) => {
+                  setForm((current) => ({ ...current, insuredPartyId: id || '' }));
+                  setInsuredPartyLabel(item
+                    ? [item.label, item.secondary].filter(Boolean).join(' · ')
+                    : '');
+                }}
               />
             </div>
+            {form.insuredPartyId && (
+              <section className="eia-card eia-selected-party span-3" aria-label="Selected insured party">
+                <div className="eia-selected-party-meta">
+                  <span className="eia-muted">Selected insured party</span>
+                  <b>{insuredPartyLabel || shortId(form.insuredPartyId)}</b>
+                  <code className="eia-mono">{form.insuredPartyId}</code>
+                </div>
+                <CrossLink
+                  className="eia-selected-party-link"
+                  href={`/party?record=${form.insuredPartyId}`}
+                >
+                  Open party record
+                </CrossLink>
+              </section>
+            )}
             <div className="eia-field">
               <label htmlFor="create-effective-date">Effective date</label>
               <input
@@ -800,12 +936,39 @@ export default function App() {
 
       <div className="eia-record-layout">
         <div>
+          <div className="eia-queue-search">
+            <div className="eia-search-box">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+                <path d="m20 20-3.4-3.4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+              <input
+                type="search"
+                value={queueFilter}
+                onChange={(event) => setQueueFilter(event.target.value)}
+                placeholder={QUEUE_FILTER_PLACEHOLDER}
+                aria-label="Filter policies"
+                autoComplete="off"
+              />
+              {filterActive && (
+                <button
+                  type="button"
+                  className="eia-queue-clear"
+                  onClick={() => setQueueFilter('')}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
           <aside className="eia-record-list" aria-label="Policy register">
             <div className="eia-record-list-head">
               <strong>Direct policies</strong>
-              <span className="eia-muted">{total}</span>
+              <span className="eia-muted">
+                {filterActive ? `${visiblePolicies.length} of ${policies.length}` : total}
+              </span>
             </div>
-            {policies.map((policy) => {
+            {visiblePolicies.map((policy) => {
               const isSelected = selected?.id === policy.id;
               return (
                 <button
@@ -827,9 +990,11 @@ export default function App() {
                 </button>
               );
             })}
-            {policies.length === 0 && (
+            {visiblePolicies.length === 0 && (
               <div className="empty">
-                {page > 0 ? 'No policies on this page.' : 'No policies yet. Use New policy to open the first record.'}
+                {filterActive
+                  ? 'No matching policies'
+                  : (page > 0 ? 'No policies on this page.' : 'No policies yet. Use New policy to open the first record.')}
               </div>
             )}
           </aside>
@@ -967,7 +1132,13 @@ export default function App() {
                         <dt>Product</dt>
                         <dd>{selectedPolicy.productCode || '—'}</dd>
                         <dt>Insured party</dt>
-                        <dd>{selectedPolicy.insuredDisplayName || selectedPolicy.insuredPartyId || '—'}</dd>
+                        <dd>
+                          {selectedPolicy.insuredPartyId ? (
+                            <CrossLink href={`/party?record=${selectedPolicy.insuredPartyId}`}>
+                              {selectedPolicy.insuredDisplayName || selectedPolicy.insuredPartyId}
+                            </CrossLink>
+                          ) : '—'}
+                        </dd>
                         <dt>Effective</dt>
                         <dd>{selectedPolicy.effectiveDate || '—'}</dd>
                         <dt>Expiration</dt>
@@ -1003,6 +1174,68 @@ export default function App() {
                       )}
                     </section>
                   </div>
+
+                  <section className="eia-context-panel" aria-label="Why this matters">
+                    <h4>Why this matters</h4>
+                    <p>
+                      This policy is the source of coverage for Direct Claims and Cessions. Changes
+                      affect both. SAP FS-RI remains the system of record for ceded amounts.
+                    </p>
+                  </section>
+
+                  <section className="eia-card" aria-label="Related records" style={{ marginTop: 14 }}>
+                    <h3>Related records</h3>
+                    {related.loading ? (
+                      <p className="eia-muted" style={{ marginTop: 8 }}>Loading related records…</p>
+                    ) : (
+                      <>
+                        {related.error && (
+                          <p className="eia-muted" style={{ marginTop: 8 }}>{related.error}</p>
+                        )}
+                        {!related.error && related.claims.length === 0 && related.cessions.length === 0 && (
+                          <p className="eia-muted" style={{ marginTop: 8 }}>
+                            No direct claims or cessions reference this policy yet.
+                          </p>
+                        )}
+                        {related.claims.length > 0 && (
+                          <>
+                            <div className="eia-related-group-label">Direct claims</div>
+                            <div className="eia-related-list">
+                              {related.claims.map((item) => (
+                                <CrossLink
+                                  key={item.id || item.href || item.label}
+                                  className="eia-related-record"
+                                  href={searchHref(item, '/direct-claims')}
+                                  title={item.secondary}
+                                >
+                                  <b>{item.label}</b>
+                                  {item.status ? <span>{item.status}</span> : null}
+                                </CrossLink>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                        {related.cessions.length > 0 && (
+                          <>
+                            <div className="eia-related-group-label">Cessions</div>
+                            <div className="eia-related-list">
+                              {related.cessions.map((item) => (
+                                <CrossLink
+                                  key={item.id || item.href || item.label}
+                                  className="eia-related-record"
+                                  href={searchHref(item, '/cession')}
+                                  title={item.secondary}
+                                >
+                                  <b>{item.label}</b>
+                                  {item.status ? <span>{item.status}</span> : null}
+                                </CrossLink>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </section>
                 </section>
               )}
 

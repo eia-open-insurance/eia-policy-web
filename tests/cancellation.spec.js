@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { mockRelated } from './support.js';
 
 const TENANT = '11111111-1111-7111-8111-111111111111';
 const POLICY_ID = 'aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa';
@@ -73,6 +74,10 @@ function reinstatement() {
 async function json(route, status, body, headers = {}) {
   await route.fulfill({ status, contentType: 'application/json', headers, body: JSON.stringify(body) });
 }
+
+test.beforeEach(async ({ page }) => {
+  await mockRelated(page);
+});
 
 test('cancels and reinstates a policy with If-Match and Idempotency-Key', async ({ page }) => {
   let current = policy();

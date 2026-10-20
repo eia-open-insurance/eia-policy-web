@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { mockPartySearch, mockRelated, selectParty, PARTY_ID } from './support.js';
 
 const TENANT = '11111111-1111-7111-8111-111111111111';
 const API = '**/api/v1/policies**';
@@ -62,10 +63,16 @@ async function json(route, status, body, headers = {}) {
   });
 }
 
+test.beforeEach(async ({ page }) => {
+  await mockRelated(page);
+  await mockPartySearch(page);
+});
+
 test('renders the operational record layout and creates a policy with an Idempotency-Key', async ({ page }) => {
   const existing = existingPolicy();
   let policies = [existing];
   let idempotencyKey = null;
+  let createBody = null;
 
   await page.route(API, async (route) => {
     const url = new URL(route.request().url());
@@ -85,6 +92,7 @@ test('renders the operational record layout and creates a policy with an Idempot
     if (method === 'POST' && url.pathname === '/api/v1/policies') {
       idempotencyKey = route.request().headers()['idempotency-key'];
       const body = route.request().postDataJSON();
+      createBody = body;
       const created = existingPolicy({
         ...body,
         id: 'cccccccc-cccc-7ccc-8ccc-cccccccccccc',
@@ -130,13 +138,16 @@ test('renders the operational record layout and creates a policy with an Idempot
   await page.getByRole('button', { name: 'New policy' }).click();
   await expect(page.getByRole('region', { name: 'Create policy' })).toBeVisible();
 
-  await page.getByPlaceholder('Insured party ID (UUID)').fill('bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb');
+  await selectParty(page);
+  await expect(page.getByRole('link', { name: 'Open party record' }))
+    .toHaveAttribute('href', `/party?record=${PARTY_ID}`);
   await page.getByRole('button', { name: 'Create policy' }).click();
 
   await expect(page.getByRole('button', { name: 'Open record POL-2026-0000002' })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
   await expect(page.getByRole('status')).toContainText('Created POL-2026-0000002');
   expect(idempotencyKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  expect(createBody.insuredPartyId).toBe(PARTY_ID);
 });
 
 test('follows next and previous links from the page envelope', async ({ page }) => {
@@ -218,7 +229,7 @@ test('renders a canonical problem+json create failure', async ({ page }) => {
 
   await page.goto('/');
   await page.getByRole('button', { name: 'New policy' }).click();
-  await page.getByPlaceholder('Insured party ID (UUID)').fill('bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb');
+  await selectParty(page);
   await page.getByRole('button', { name: 'Create policy' }).click();
 
   const alert = page.getByRole('alert');

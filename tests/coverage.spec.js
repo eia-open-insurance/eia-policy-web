@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { mockRelated } from './support.js';
 
 const TENANT = '11111111-1111-7111-8111-111111111111';
 const POLICY_ID = 'aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa';
@@ -113,6 +114,10 @@ async function json(route, status, body, headers = {}) {
     body: JSON.stringify(body)
   });
 }
+
+test.beforeEach(async ({ page }) => {
+  await mockRelated(page);
+});
 
 test('adds a coverage with limits and applies aggregate erosion', async ({ page }) => {
   let coverages = [];

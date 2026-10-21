@@ -4,9 +4,9 @@
 
 The Policy remote renders the policy workbench: a paginated policy list, DRAFT
 creation with idempotency, lifecycle advance with ETag/If-Match, and a record
-detail with tabs for programs, versions, coverages and limits, mass tort,
-endorsements, insureds and locations, billing, cancellation/reinstatement, and
-an event-derived activity timeline.
+detail with tabs for programs, legal entities, versions, coverages and limits,
+mass tort, endorsements, insureds and locations, billing,
+cancellation/reinstatement, and an event-derived activity timeline.
 
 The Program tab sits after Overview. The current assignment is read from the
 policy record's `programId`, then `GET /api/v1/programs/{programId}` fills the
@@ -24,6 +24,26 @@ are reported so the operator can retry. Program reads are contained in the tab
 with a Retry action. The context panel states that a program groups related
 policies for capacity and aggregate administration and that assigning one does
 not change coverage, limits, premium, or the policy version.
+
+The Legal entity tab sits after Program and shows the issuing, licensed carrier.
+The current assignment is read from the policy record's `legalEntityId` (the
+SPEC name `issuingLegalEntityId` and a nested legal-entity object are tolerated),
+then `GET /api/v1/legal-entities/{legalEntityId}` fills the card with the entity
+code, legal name, type, jurisdiction, regulator, license, and status. A policy
+with no assignment is the tab's empty state, not an error; a missing assigned
+record (404) is reported inside the tab instead of being shown as unassigned.
+The typeahead reads `GET /api/v1/legal-entities?q=…`, and `Attach legal entity`
+sends `PATCH /api/v1/policies/{policyId}/legal-entity` with `{legalEntityId}`;
+`Detach` sends the same command with `legalEntityId: null`.
+`Create legal entity` posts `{code, name, type, jurisdiction, regulator?,
+license?}` to `POST /api/v1/legal-entities` with an `Idempotency-Key` and then
+attaches the returned entity id to the current policy. If creation succeeds but
+the attach is rejected, the modal closes, the created entity stays selected in
+the attach card, and both outcomes are reported so the operator can retry. A 409
+on attach, detach, or the create/attach split re-reads the current assignment
+and keeps the canonical problem in the tab. The context panel states that the
+legal entity is the issuing, licensed carrier and that assigning one does not
+change coverage or limits.
 
 The Mass tort tab sits after Coverage & Limits and administers the policy-owned
 mass tort profile. `GET /mass-tort-profile` is read lazily on tab selection; a
@@ -126,6 +146,13 @@ payloads, form defaults and validation, status/type/label helpers, and tolerant
 normalization of the program read and list. `src/ProgramPicker.jsx` is the
 debounced, abortable program typeahead; it only selects an existing program and
 never mutates the policy.
+`src/legalEntities.js` holds the legal-entity type catalog, endpoints, create and
+attach payloads, form validation, status/type/label helpers, and tolerant
+normalization of the entity read and list (catalog names such as `entityCode`,
+`legalName`, `entityType`, and the domicile pair are accepted alongside `code`,
+`name`, `type`, and `jurisdiction`). `src/LegalEntityPicker.jsx` is the
+debounced, abortable legal-entity typeahead; it only selects an existing entity
+and never mutates the policy.
 
 No business rule is duplicated in the remote; canonical problems from the domain
 are rendered with their field errors.
@@ -167,7 +194,12 @@ state, attaching a catalog program with the lead-policy link and PATCH payload,
 detaching with `programId: null`, create defaults with the current policy as
 lead, creating without a lead policy, create validation and a catalog rejection
 inside the open dialog, attach rejection/retry, and a contained program read
-failure with retry.
+failure with retry; `tests/legal-entity.spec.js` covers the tab position and
+no-entity empty state, attaching a catalog entity and rendering its issuing
+details, detaching with `legalEntityId: null`, creating an entity with all
+catalog fields and attaching it, create validation and a catalog rejection
+inside the open dialog, a 404 for the assigned entity, a contained entity read
+failure with retry, and a 409 attach conflict that reloads and retries.
 
 ## Known SPEC gaps in this slice
 
@@ -192,6 +224,15 @@ failure with retry.
   shapes are normalized defensively (`programNumber`/`code`, `programType`/
   `type`, `leadPolicyId`/`leadPolicyNumber`). Program versions, capacity
   shares, coinsurance, fronting, captives, and pools are not rendered.
+- The Legal entity tab consumes `GET`/`POST /api/v1/legal-entities`,
+  `GET /api/v1/legal-entities/{legalEntityId}`, and
+  `PATCH /api/v1/policies/{policyId}/legal-entity`; the current assignment is
+  read from the policy record's `legalEntityId` (the SPEC
+  `issuingLegalEntityId` and a nested legal-entity object are tolerated). The
+  response shapes are normalized defensively because the endpoints are not yet
+  published by a backend in this tree. Legal-entity relationships, organization
+  units, and the capacity/coinsurance/fronting structures that reference the
+  entity are not rendered.
 - No optimistic UI or offline queue; every mutation waits for the domain.
 - The remote does not read the field-usage manifest or the theme/UI-kit packages
   from `eia-frontend`.

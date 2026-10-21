@@ -11,7 +11,7 @@
 
 ## Purpose
 
-Policy federated remote: screens, widgets, record tabs, and transaction composition. Direct policy lifecycle, coverage, limits, mass tort profiles, programs, billing, underwriting, rating, and capacity.
+Policy federated remote: screens, widgets, record tabs, and transaction composition. Direct policy lifecycle, coverage, limits, mass tort profiles, programs, legal entities, billing, underwriting, rating, and capacity.
 
 ## Implemented slice
 
@@ -38,6 +38,17 @@ Opening a policy shows a record detail with tabs:
   to the current policy) to `POST /api/v1/programs` and attaches it to the
   policy; `Detach program` clears the association. Assigning a program is
   administrative and does not change coverage or limits.
+- **Legal entity** — the policy's issuing, licensed carrier. The current
+  assignment is read from the policy record and the card shows the entity code,
+  legal name, type, jurisdiction, regulator, license, and status, with a
+  `Detach` action. With no entity, the tab explains that the legal entity issues
+  and is licensed for the policy, offers a typeahead over
+  `GET /api/v1/legal-entities`, and attaches an existing entity through
+  `PATCH /api/v1/policies/{policyId}/legal-entity`. `Create legal entity` posts
+  a new catalog record (code, name, type, jurisdiction, regulator, license) to
+  `POST /api/v1/legal-entities` and attaches it to the policy. Reads, 404s, and
+  409 conflicts stay contained in the tab; assigning a legal entity does not
+  change coverage or limits.
 - **Versions** — immutable version history, change type, effective window, and
   premium delta.
 - **Coverages & Limits** — coverage grants with per-occurrence, aggregate,
@@ -115,7 +126,7 @@ npm run build
 npm test
 ```
 
-`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/program.spec.js` covers the Program tab position and empty state, attaching a catalog program with the lead-policy link, the detach payload, create defaults with the current policy as lead, creating without a lead policy, create validation/rejection, attach rejection and retry, and a contained program read failure with retry. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/mass-tort.spec.js` covers the profile empty state, draft save, complete validation, existing-value load and edit, context boundary, read failure, 400 problem, and 409 reload, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, linking an existing policy payment (fetch, selection/apply payload, amount warning, empty, read failure, and 409), the Payment hand-off URL, and 409 conflicts, and `tests/renewal.spec.js` covers the action's status eligibility, modal term/premium defaults, renewal payload and headers, success selection/notice, the predecessor link, and the 409 conflict. `@swc/core` is pinned to `1.10.7`.
+`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/legal-entity.spec.js` covers the Legal entity tab position and empty state, attaching a catalog entity and rendering its issuing details, the detach payload, creating an entity with all catalog fields and attaching it, create validation/rejection inside the open dialog, a missing assigned entity, a contained entity read failure with retry, and a 409 attach conflict with reload and retry. `tests/program.spec.js` covers the Program tab position and empty state, attaching a catalog program with the lead-policy link, the detach payload, create defaults with the current policy as lead, creating without a lead policy, create validation/rejection, attach rejection and retry, and a contained program read failure with retry. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/mass-tort.spec.js` covers the profile empty state, draft save, complete validation, existing-value load and edit, context boundary, read failure, 400 problem, and 409 reload, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, linking an existing policy payment (fetch, selection/apply payload, amount warning, empty, read failure, and 409), the Payment hand-off URL, and 409 conflicts, and `tests/renewal.spec.js` covers the action's status eligibility, modal term/premium defaults, renewal payload and headers, success selection/notice, the predecessor link, and the 409 conflict. `@swc/core` is pinned to `1.10.7`.
 
 ## Responsibilities
 

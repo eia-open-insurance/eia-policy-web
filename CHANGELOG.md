@@ -109,6 +109,24 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   the lead-policy link, detach payload, create defaults/lead policy, create
   validation, attach rejection and retry, and a contained program read failure
   with retry.
+- Legal entity tab after Program with a no-entity empty state, the assigned
+  entity's code, name, type, jurisdiction, regulator, license, and status, and a
+  `Detach` action.
+- Attach existing legal-entity typeahead over `GET /api/v1/legal-entities` with
+  an `Attach legal entity` action that sends
+  `PATCH /api/v1/policies/{policyId}/legal-entity` with `{legalEntityId}`;
+  detaching sends the same command with `legalEntityId: null`.
+- Create legal entity modal (code, name, type, jurisdiction, regulator, license)
+  that posts `POST /api/v1/legal-entities` with an `Idempotency-Key` and then
+  attaches the new entity to the current policy. A create/attach split failure
+  keeps the created entity selectable in the attach card.
+- Contained legal-entity loading, 404, and unavailable states with retry, and a
+  409 conflict that re-reads the current assignment before the operator retries.
+- Legal entity context panel stating that the legal entity is the issuing,
+  licensed carrier and that assigning one does not change coverage or limits.
+- Playwright coverage for the tab position and empty state, attach, detach,
+  create, create validation/rejection, a missing assigned entity, a contained
+  read failure with retry, and a 409 attach conflict with reload and retry.
 
 ### Changed
 

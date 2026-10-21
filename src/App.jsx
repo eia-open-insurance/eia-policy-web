@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ActivityTimeline, { activityEndpoint, sortActivityItems } from './ActivityTimeline.jsx';
 import EntityPicker from './EntityPicker.jsx';
+import LegalEntityPicker from './LegalEntityPicker.jsx';
 import ProgramPicker from './ProgramPicker.jsx';
 import {
   BILLING_FREQUENCIES,
@@ -59,6 +60,28 @@ import {
 } from './massTort.js';
 import { partyEndpoint, partyRecordLabel } from './party.js';
 import {
+  LEGAL_ENTITY_TYPES,
+  MAX_LEGAL_ENTITY_CODE_LENGTH,
+  MAX_LEGAL_ENTITY_JURISDICTION_LENGTH,
+  MAX_LEGAL_ENTITY_LICENSE_LENGTH,
+  MAX_LEGAL_ENTITY_NAME_LENGTH,
+  MAX_LEGAL_ENTITY_REGULATOR_LENGTH,
+  defaultLegalEntityForm,
+  emptyLegalEntityState,
+  legalEntityAttachPayload,
+  legalEntityCreatePayload,
+  legalEntityDisplayLabel,
+  legalEntityEndpoint,
+  legalEntityJurisdictionLabel,
+  legalEntityLabel,
+  legalEntityStatusTone,
+  legalEntityTypeLabel,
+  normalizeLegalEntity,
+  policyLegalEntityEndpoint,
+  policyLegalEntityId,
+  validateLegalEntityForm
+} from './legalEntities.js';
+import {
   MAX_PROGRAM_NAME_LENGTH,
   PROGRAM_TYPES,
   defaultProgramForm,
@@ -101,6 +124,7 @@ const NEXT_STATUS = {
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'program', label: 'Program' },
+  { id: 'legalEntity', label: 'Legal entity' },
   { id: 'versions', label: 'Versions' },
   { id: 'coverages', label: 'Coverages & Limits' },
   { id: 'massTort', label: 'Mass tort' },
@@ -348,6 +372,18 @@ export default function App() {
   const [programSaving, setProgramSaving] = useState(false);
   const [programLeadPolicy, setProgramLeadPolicy] = useState(null);
 
+  const [legalEntity, setLegalEntity] = useState(emptyLegalEntityState);
+  const legalEntityRequestRef = useRef(0);
+  const [legalEntityPick, setLegalEntityPick] = useState(null);
+  const [legalEntityBusy, setLegalEntityBusy] = useState('');
+  const [legalEntityAttachError, setLegalEntityAttachError] = useState('');
+  const [legalEntityActionError, setLegalEntityActionError] = useState('');
+  const [legalEntityConflict, setLegalEntityConflict] = useState('');
+  const [legalEntityCreateOpen, setLegalEntityCreateOpen] = useState(false);
+  const [legalEntityForm, setLegalEntityForm] = useState(() => defaultLegalEntityForm());
+  const [legalEntityFormError, setLegalEntityFormError] = useState('');
+  const [legalEntitySaving, setLegalEntitySaving] = useState(false);
+
   const [coverageForm, setCoverageForm] = useState(() => defaultCoverageForm(null));
   const [erosionForm, setErosionForm] = useState({
     claimId: '', allocationId: '', sourceVersion: '1',
@@ -572,6 +608,7 @@ export default function App() {
       clearMassTort();
       setMassTortForm(defaultMassTortForm(null, detail.body));
       clearProgram();
+      clearLegalEntity();
       if (!options.keepTab) {
         setCoverageForm(defaultCoverageForm(detail.body));
         setInsuredForm(defaultInsuredForm(detail.body));
@@ -929,6 +966,109 @@ export default function App() {
   }
 
   /**
+   * A policy is issued by at most one legal entity. The tab reads the policy's
+   * current assignment, then the legal-entity catalog record, so a policy with
+   * no assignment is the tab's empty state rather than an unavailable tab. A
+   * missing policy read or legal-entity read stays inside the card and never
+   * blocks the record. A 404 on the assigned entity means the catalog no longer
+   * has it; that is reported in the tab and is not treated as "not assigned".
+   *
+   * `policy` may be passed when a command already returned the updated
+   * assignment; otherwise the policy is re-read so the tab never displays an
+   * association that was cleared or changed elsewhere.
+   */
+  async function loadLegalEntity(policy = null, options = {}) {
+    const requestId = legalEntityRequestRef.current + 1;
+    legalEntityRequestRef.current = requestId;
+    const policyId = options.policyId || selected?.id;
+    if (!policyId) {
+      setLegalEntity(emptyLegalEntityState());
+      return null;
+    }
+    setLegalEntity((current) => ({ ...current, loading: true, error: '' }));
+    try {
+      let record = policy;
+      if (!record) {
+        const detail = await api(`/api/v1/policies/${policyId}`);
+        if (legalEntityRequestRef.current !== requestId) return null;
+        if (detail.response.status === 404) {
+          setLegalEntity({
+            legalEntity: null,
+            loading: false,
+            error: 'This policy record could not be found.'
+          });
+          return null;
+        }
+        if (!detail.response.ok) {
+          setLegalEntity({
+            legalEntity: null,
+            loading: false,
+            error: 'Legal entity assignment is temporarily unavailable.'
+          });
+          return null;
+        }
+        record = detail.body;
+      }
+      const legalEntityId = policyLegalEntityId(record);
+      if (!legalEntityId) {
+        setLegalEntity({ ...emptyLegalEntityState(), loading: false });
+        return null;
+      }
+      const result = await api(legalEntityEndpoint(legalEntityId));
+      if (legalEntityRequestRef.current !== requestId) return null;
+      if (result.response.status === 404) {
+        setLegalEntity({
+          legalEntity: null,
+          loading: false,
+          error: 'The assigned legal entity could not be found.'
+        });
+        return null;
+      }
+      if (!result.response.ok) {
+        setLegalEntity({
+          legalEntity: null,
+          loading: false,
+          error: 'Legal entity is temporarily unavailable.'
+        });
+        return null;
+      }
+      const normalized = normalizeLegalEntity(result.body);
+      if (!normalized) {
+        setLegalEntity({
+          legalEntity: null,
+          loading: false,
+          error: 'The assigned legal entity could not be read.'
+        });
+        return null;
+      }
+      setLegalEntity({ legalEntity: normalized, loading: false, error: '' });
+      return normalized;
+    } catch {
+      if (legalEntityRequestRef.current !== requestId) return null;
+      setLegalEntity({
+        legalEntity: null,
+        loading: false,
+        error: 'Legal entity is temporarily unavailable.'
+      });
+      return null;
+    }
+  }
+
+  function clearLegalEntity() {
+    legalEntityRequestRef.current += 1;
+    setLegalEntity(emptyLegalEntityState());
+    setLegalEntityPick(null);
+    setLegalEntityBusy('');
+    setLegalEntityAttachError('');
+    setLegalEntityActionError('');
+    setLegalEntityConflict('');
+    setLegalEntityCreateOpen(false);
+    setLegalEntityForm(defaultLegalEntityForm());
+    setLegalEntityFormError('');
+    setLegalEntitySaving(false);
+  }
+
+  /**
    * The activity timeline is derived from the platform event stream, not from
    * the policy aggregate. It loads as soon as a record is selected, but remains
    * card-local: an unavailable event service never blocks the policy record.
@@ -984,6 +1124,8 @@ export default function App() {
         await loadCurrentVersion(policyId);
       } else if (tabId === 'program') {
         await loadProgram(null, { policyId });
+      } else if (tabId === 'legalEntity') {
+        await loadLegalEntity(null, { policyId });
       } else if (tabId === 'versions') {
         const result = await api(`/api/v1/policies/${policyId}/versions?page=0&size=50`);
         if (!result.response.ok) setError(problemMessage(result.body, 'Version history failed'));
@@ -1087,6 +1229,7 @@ export default function App() {
     clearCreditNotes();
     clearMassTort();
     clearProgram();
+    clearLegalEntity();
   }
 
   async function refreshWorkspace() {
@@ -1853,6 +1996,226 @@ export default function App() {
     }
   }
 
+  // ---- legal entity assignment --------------------------------------
+  function updateLegalEntityForm(field, value) {
+    setLegalEntityForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function openLegalEntityCreate() {
+    if (!selected) return;
+    setLegalEntityFormError('');
+    setLegalEntityAttachError('');
+    setLegalEntityActionError('');
+    setLegalEntityConflict('');
+    setLegalEntityForm(defaultLegalEntityForm());
+    setLegalEntityCreateOpen(true);
+  }
+
+  function closeLegalEntityCreate() {
+    if (legalEntitySaving) return;
+    setLegalEntityCreateOpen(false);
+    setLegalEntityFormError('');
+  }
+
+  function selectLegalEntityForAttach(legalEntityId, picked) {
+    setLegalEntityAttachError('');
+    setLegalEntityPick(picked || (legalEntityId ? { id: legalEntityId } : null));
+  }
+
+  /**
+   * A conflict means the policy or the catalog changed since the tab read it.
+   * The canonical problem stays in the tab and the assignment is re-read, so
+   * the next attempt starts from the current state instead of a stale card.
+   */
+  async function reloadLegalEntityAfterConflict() {
+    try {
+      const updated = await refreshSelected();
+      await loadLegalEntity(updated || null);
+    } catch {
+      // The conflict is already reported; Retry re-reads the tab.
+    }
+  }
+
+  /**
+   * Attaching records the issuing-entity association with
+   * PATCH /policies/{id}/legal-entity. The legal entity itself is not edited
+   * and the policy keeps its coverage, limits, premium, and version; the policy
+   * is re-read afterwards so the record and the card agree.
+   */
+  async function attachLegalEntity() {
+    if (!selected || legalEntityBusy) return;
+    const target = legalEntityPick;
+    if (!target?.id) {
+      setLegalEntityAttachError('Select a legal entity to attach.');
+      return;
+    }
+    setLegalEntityAttachError('');
+    setLegalEntityActionError('');
+    setLegalEntityConflict('');
+    setLegalEntityBusy('attach');
+    try {
+      const result = await api(policyLegalEntityEndpoint(selected.id), {
+        method: 'PATCH',
+        body: legalEntityAttachPayload(target.id)
+      });
+      if (!result.response.ok) {
+        const message = problemMessage(
+          result.body,
+          `Attach failed: ${result.response.status}`
+        );
+        setLegalEntityAttachError(message);
+        if (result.response.status === 409) {
+          setLegalEntityConflict(
+            `${message} The current assignment was re-read; review it before retrying.`
+          );
+          await reloadLegalEntityAfterConflict();
+        } else if (result.response.status === 404) {
+          await reloadLegalEntityAfterConflict();
+        }
+        return;
+      }
+      setNotice(
+        `Attached legal entity ${legalEntityLabel(target)} to `
+        + `${selected.policy?.policyNumber || 'the policy'}.`
+      );
+      setLegalEntityPick(null);
+      const updated = await refreshSelected();
+      const record = updated && policyLegalEntityId(updated)
+        ? updated
+        : { ...(updated || selected.policy), legalEntityId: target.id };
+      await loadLegalEntity(record);
+    } catch (e) {
+      setLegalEntityAttachError(e.message);
+    } finally {
+      setLegalEntityBusy('');
+    }
+  }
+
+  /**
+   * Detaching clears only the association. An explicit null legalEntityId is
+   * sent so the command cannot be mistaken for an absent field.
+   */
+  async function detachLegalEntity() {
+    if (!selected || legalEntityBusy) return;
+    const current = legalEntity.legalEntity;
+    setLegalEntityAttachError('');
+    setLegalEntityActionError('');
+    setLegalEntityConflict('');
+    setLegalEntityBusy('detach');
+    try {
+      const result = await api(policyLegalEntityEndpoint(selected.id), {
+        method: 'PATCH',
+        body: legalEntityAttachPayload(null)
+      });
+      if (!result.response.ok) {
+        const message = problemMessage(
+          result.body,
+          `Detach failed: ${result.response.status}`
+        );
+        setLegalEntityActionError(message);
+        if (result.response.status === 409) {
+          setLegalEntityConflict(
+            `${message} The current assignment was re-read; review it before retrying.`
+          );
+          await reloadLegalEntityAfterConflict();
+        } else if (result.response.status === 404) {
+          await reloadLegalEntityAfterConflict();
+        }
+        return;
+      }
+      setNotice(`Detached legal entity ${legalEntityLabel(current)}.`);
+      setLegalEntityPick(null);
+      const updated = await refreshSelected();
+      const record = { ...(updated || selected.policy), legalEntityId: null, legalEntity: null };
+      await loadLegalEntity(record);
+    } catch (e) {
+      setLegalEntityActionError(e.message);
+    } finally {
+      setLegalEntityBusy('');
+    }
+  }
+
+  /**
+   * Creating a legal entity also attaches it to the policy it was created
+   * from. If creation succeeds but the attach fails, the new entity stays in
+   * the catalog and is preselected in the attach card for a retry.
+   */
+  async function submitLegalEntityCreate(event) {
+    event.preventDefault();
+    if (!selected || legalEntitySaving) return;
+    setLegalEntityFormError('');
+    const validation = validateLegalEntityForm(legalEntityForm);
+    if (validation) {
+      setLegalEntityFormError(validation);
+      return;
+    }
+    const payload = legalEntityCreatePayload(legalEntityForm);
+    setLegalEntitySaving(true);
+    setLegalEntityConflict('');
+    try {
+      const created = await api('/api/v1/legal-entities', {
+        method: 'POST',
+        body: payload,
+        idempotencyKey: newIdempotencyKey()
+      });
+      if (!created.response.ok) {
+        setLegalEntityFormError(
+          problemMessage(
+            created.body,
+            `Legal entity creation failed: ${created.response.status}`
+          )
+        );
+        return;
+      }
+      const createdEntity = normalizeLegalEntity(created.body);
+      if (!createdEntity?.id) {
+        setLegalEntityFormError(
+          'The legal entity was created without an id in the response. Reload the tab and attach it from the catalog.'
+        );
+        return;
+      }
+      const attach = await api(policyLegalEntityEndpoint(selected.id), {
+        method: 'PATCH',
+        body: legalEntityAttachPayload(createdEntity.id)
+      });
+      if (!attach.response.ok) {
+        const message = `Created ${legalEntityLabel(createdEntity)} but attaching it to this policy failed: `
+          + `${problemMessage(attach.body, `status ${attach.response.status}`)} `
+          + 'Select it under Attach existing legal entity to try again.';
+        setLegalEntityCreateOpen(false);
+        setLegalEntityForm(defaultLegalEntityForm());
+        setLegalEntityPick(createdEntity);
+        setLegalEntityAttachError(message);
+        if (attach.response.status === 409) {
+          setLegalEntityConflict(message);
+          await reloadLegalEntityAfterConflict();
+        } else if (attach.response.status === 404) {
+          await reloadLegalEntityAfterConflict();
+        } else {
+          await loadLegalEntity(null, { policyId: selected.id });
+        }
+        setNotice(`Created legal entity ${legalEntityLabel(createdEntity)}.`);
+        return;
+      }
+      setLegalEntityCreateOpen(false);
+      setLegalEntityForm(defaultLegalEntityForm());
+      setLegalEntityPick(null);
+      setNotice(
+        `Created legal entity ${legalEntityLabel(createdEntity)} and attached it to `
+        + `${selected.policy?.policyNumber || 'the policy'}.`
+      );
+      const updated = await refreshSelected();
+      const record = updated && policyLegalEntityId(updated)
+        ? updated
+        : { ...(updated || selected.policy), legalEntityId: createdEntity.id };
+      await loadLegalEntity(record);
+    } catch (e) {
+      setLegalEntityFormError(e.message);
+    } finally {
+      setLegalEntitySaving(false);
+    }
+  }
+
   const selectedPolicy = selected?.policy;
   const advanceTarget = selectedPolicy ? nextStatusFor(selectedPolicy.status) : null;
   const renewalAllowed = selectedPolicy ? isRenewable(selectedPolicy.status) : false;
@@ -1875,6 +2238,7 @@ export default function App() {
       ? programLeadPolicy.number
       : currentProgram?.leadPolicyNumber || shortId(programLeadPolicyId))
     : '';
+  const currentLegalEntity = legalEntity.legalEntity;
 
   /**
    * A renewal record knows its predecessor by id only. Resolve the policy
@@ -2338,7 +2702,7 @@ export default function App() {
                 ))}
               </nav>
 
-              {tabLoading && tab !== 'billing' && tab !== 'massTort' && tab !== 'program' && (
+              {tabLoading && tab !== 'billing' && tab !== 'massTort' && tab !== 'program' && tab !== 'legalEntity' && (
                 <p className="eia-muted">Loading…</p>
               )}
 
@@ -2742,6 +3106,225 @@ export default function App() {
                   )}
 
                   <ProgramContextPanel />
+                </section>
+              )}
+
+              {tab === 'legalEntity' && (
+                <section
+                  id="panel-legalEntity"
+                  role="tabpanel"
+                  aria-labelledby="tab-legalEntity"
+                >
+                  <div className="eia-section-title">
+                    <h2>Legal entity</h2>
+                    <span className="eia-muted">Issuing carrier · Direct book</span>
+                  </div>
+                  <div className="eia-toolbar" style={{ marginBottom: 12 }}>
+                    <span className="eia-muted">
+                      One issuing legal entity per policy · assigning does not change coverage or
+                      limits
+                    </span>
+                    <span className="spacer" />
+                    <button
+                      type="button"
+                      data-testid="create-legal-entity"
+                      onClick={openLegalEntityCreate}
+                    >
+                      Create legal entity
+                    </button>
+                  </div>
+
+                  {legalEntityConflict && (
+                    <p
+                      role="alert"
+                      className="eia-legal-entity-conflict"
+                      data-testid="legal-entity-conflict"
+                    >
+                      {legalEntityConflict}
+                    </p>
+                  )}
+
+                  {legalEntity.loading && !currentLegalEntity ? (
+                    <p className="eia-muted" data-testid="legal-entity-loading">
+                      Loading legal entity…
+                    </p>
+                  ) : legalEntity.error ? (
+                    <section
+                      className="eia-card"
+                      aria-label="Legal entity unavailable"
+                      data-testid="legal-entity-error"
+                    >
+                      <p role="alert" style={{ marginTop: 0 }}>{legalEntity.error}</p>
+                      <button
+                        type="button"
+                        className="eia-btn-secondary"
+                        onClick={() => loadLegalEntity()}
+                      >
+                        Retry
+                      </button>
+                    </section>
+                  ) : !currentLegalEntity ? (
+                    <>
+                      <section
+                        className="eia-card eia-legal-entity-empty"
+                        aria-label="No legal entity assigned"
+                        data-testid="legal-entity-empty"
+                      >
+                        <h3 style={{ marginTop: 0 }}>No legal entity assigned</h3>
+                        <p className="eia-billing-copy">
+                          This policy does not record an issuing legal entity. The legal entity is
+                          the licensed carrier that issues the policy and owns its billing, tax,
+                          and regulatory reporting.
+                        </p>
+                        <p className="eia-billing-copy">
+                          Attach an existing legal entity below, or create one to record the
+                          issuing carrier. Assigning a legal entity is administrative: coverage,
+                          limits, premium, and the policy version stay unchanged.
+                        </p>
+                      </section>
+
+                      <section
+                        className="eia-card"
+                        aria-label="Attach existing legal entity"
+                        data-testid="legal-entity-attach"
+                        style={{ marginTop: 16 }}
+                      >
+                        <div className="eia-section-title" style={{ marginTop: 0 }}>
+                          <h2>Attach existing legal entity</h2>
+                          <span className="eia-muted">Reads the legal-entity catalog</span>
+                        </div>
+                        <p className="eia-billing-copy">
+                          Search by entity code or legal name. Attaching records the association
+                          on this policy; the legal entity keeps its own type, jurisdiction,
+                          regulator, license, and status.
+                        </p>
+                        <div className="eia-form-grid">
+                          <div className="eia-field span-2">
+                            <label htmlFor="legal-entity-attach-picker">Legal entity</label>
+                            <LegalEntityPicker
+                              value={legalEntityPick?.id || ''}
+                              valueLabel={legalEntityPick
+                                ? legalEntityDisplayLabel(legalEntityPick)
+                                : ''}
+                              onChange={selectLegalEntityForAttach}
+                              disabled={Boolean(legalEntityBusy)}
+                            />
+                          </div>
+                          <div className="eia-field">
+                            <button
+                              type="button"
+                              data-testid="attach-legal-entity"
+                              onClick={attachLegalEntity}
+                              disabled={Boolean(legalEntityBusy) || !legalEntityPick?.id}
+                            >
+                              {legalEntityBusy === 'attach'
+                                ? 'Attaching…'
+                                : 'Attach legal entity'}
+                            </button>
+                          </div>
+                        </div>
+                        {legalEntityPick && (
+                          <p
+                            className="eia-muted"
+                            style={{ margin: '8px 0 0' }}
+                            data-testid="legal-entity-attach-selection"
+                          >
+                            Selected {legalEntityDisplayLabel(legalEntityPick)}
+                            {legalEntityPick.type
+                              ? ` · ${legalEntityTypeLabel(legalEntityPick.type)}`
+                              : ''}
+                            {legalEntityPick.status ? ` · ${legalEntityPick.status}` : ''}
+                          </p>
+                        )}
+                        {legalEntityAttachError && (
+                          <p
+                            role="alert"
+                            data-testid="legal-entity-attach-error"
+                            style={{ margin: '10px 0 0' }}
+                          >
+                            {legalEntityAttachError}
+                          </p>
+                        )}
+                      </section>
+                    </>
+                  ) : (
+                    <section
+                      className="eia-card"
+                      aria-label="Current legal entity"
+                      data-testid="legal-entity-current"
+                    >
+                      <div className="eia-section-title" style={{ marginTop: 0 }}>
+                        <h2>Issuing legal entity</h2>
+                        <span
+                          className={`eia-pill ${legalEntityStatusTone(currentLegalEntity.status)}`}
+                          data-testid="legal-entity-status"
+                        >
+                          {currentLegalEntity.status || '—'}
+                        </span>
+                      </div>
+                      <dl className="eia-kv" style={{ marginTop: 10 }}>
+                        <dt>Entity code</dt>
+                        <dd className="eia-mono" data-testid="legal-entity-value-code">
+                          {currentLegalEntity.code || '—'}
+                        </dd>
+                        <dt>Legal name</dt>
+                        <dd data-testid="legal-entity-value-name">
+                          {currentLegalEntity.name || '—'}
+                        </dd>
+                        <dt>Type</dt>
+                        <dd data-testid="legal-entity-value-type">
+                          {legalEntityTypeLabel(currentLegalEntity.type)}
+                        </dd>
+                        <dt>Jurisdiction</dt>
+                        <dd data-testid="legal-entity-value-jurisdiction">
+                          {legalEntityJurisdictionLabel(currentLegalEntity)}
+                        </dd>
+                        <dt>Regulator</dt>
+                        <dd data-testid="legal-entity-value-regulator">
+                          {currentLegalEntity.regulator || '—'}
+                        </dd>
+                        <dt>License</dt>
+                        <dd data-testid="legal-entity-value-license">
+                          {currentLegalEntity.license || '—'}
+                        </dd>
+                        <dt>Status</dt>
+                        <dd data-testid="legal-entity-value-status">
+                          {currentLegalEntity.status || '—'}
+                        </dd>
+                      </dl>
+
+                      {legalEntityActionError && (
+                        <p
+                          role="alert"
+                          data-testid="legal-entity-action-error"
+                          style={{ margin: '12px 0 0' }}
+                        >
+                          {legalEntityActionError}
+                        </p>
+                      )}
+
+                      <div
+                        className="eia-actions"
+                        style={{ marginTop: 14, justifyContent: 'flex-start' }}
+                      >
+                        <button
+                          type="button"
+                          className="eia-btn-secondary"
+                          data-testid="detach-legal-entity"
+                          onClick={detachLegalEntity}
+                          disabled={Boolean(legalEntityBusy)}
+                        >
+                          {legalEntityBusy === 'detach' ? 'Detaching…' : 'Detach'}
+                        </button>
+                      </div>
+                      <p className="eia-muted" style={{ margin: '8px 0 0' }}>
+                        Detaching removes only the issuing-entity association. Coverage, limits,
+                        premium, and the policy version stay unchanged.
+                      </p>
+                    </section>
+                  )}
+
+                  <LegalEntityContextPanel />
                 </section>
               )}
 
@@ -4579,6 +5162,129 @@ export default function App() {
           </div>
         </div>
       )}
+      {legalEntityCreateOpen && selectedPolicy && (
+        <div className="eia-modal-backdrop">
+          <div
+            className="eia-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="legal-entity-dialog-title"
+            aria-describedby="legal-entity-dialog-description"
+            data-testid="legal-entity-dialog"
+          >
+            <div className="eia-section-title" style={{ marginTop: 0 }}>
+              <h2 id="legal-entity-dialog-title">Create legal entity</h2>
+              <span className="eia-badge">{selectedPolicy.policyNumber}</span>
+            </div>
+            <p className="eia-modal-lede" id="legal-entity-dialog-description">
+              The new legal entity is added to the legal-entity catalog and attached to this
+              policy when it is created.
+              {currentLegalEntity ? ' The current legal-entity assignment is replaced.' : ''}
+            </p>
+
+            {legalEntityFormError && (
+              <p role="alert" className="eia-modal-error" data-testid="legal-entity-form-error">
+                {legalEntityFormError}
+              </p>
+            )}
+
+            <form className="eia-form-grid" onSubmit={submitLegalEntityCreate}>
+              <div className="eia-field">
+                <label htmlFor="legal-entity-code">Entity code</label>
+                <input
+                  id="legal-entity-code"
+                  value={legalEntityForm.code}
+                  maxLength={MAX_LEGAL_ENTITY_CODE_LENGTH}
+                  placeholder="EIA-INS-US"
+                  onChange={(e) => updateLegalEntityForm('code', e.target.value)}
+                  autoFocus
+                />
+                <span className="eia-field-hint">
+                  Business code of the carrier. Immutable once the entity exists.
+                </span>
+              </div>
+              <div className="eia-field span-2">
+                <label htmlFor="legal-entity-name">Legal name</label>
+                <input
+                  id="legal-entity-name"
+                  value={legalEntityForm.name}
+                  maxLength={MAX_LEGAL_ENTITY_NAME_LENGTH}
+                  placeholder="EIA Insurance Company"
+                  onChange={(e) => updateLegalEntityForm('name', e.target.value)}
+                />
+              </div>
+              <div className="eia-field">
+                <label htmlFor="legal-entity-type">Entity type</label>
+                <select
+                  id="legal-entity-type"
+                  value={legalEntityForm.type}
+                  onChange={(e) => updateLegalEntityForm('type', e.target.value)}
+                >
+                  <option value="">Select an entity type</option>
+                  {LEGAL_ENTITY_TYPES.map((entry) => (
+                    <option key={entry.value} value={entry.value}>{entry.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="eia-field">
+                <label htmlFor="legal-entity-jurisdiction">Jurisdiction</label>
+                <input
+                  id="legal-entity-jurisdiction"
+                  value={legalEntityForm.jurisdiction}
+                  maxLength={MAX_LEGAL_ENTITY_JURISDICTION_LENGTH}
+                  placeholder="US-DE"
+                  onChange={(e) => updateLegalEntityForm('jurisdiction', e.target.value)}
+                />
+                <span className="eia-field-hint">
+                  Domicile region or regulator code, e.g. US-DE.
+                </span>
+              </div>
+              <div className="eia-field">
+                <label htmlFor="legal-entity-regulator">Regulator</label>
+                <input
+                  id="legal-entity-regulator"
+                  value={legalEntityForm.regulator}
+                  maxLength={MAX_LEGAL_ENTITY_REGULATOR_LENGTH}
+                  placeholder="Delaware Department of Insurance"
+                  onChange={(e) => updateLegalEntityForm('regulator', e.target.value)}
+                />
+                <span className="eia-field-hint">Optional. Primary licensing regulator.</span>
+              </div>
+              <div className="eia-field span-3">
+                <label htmlFor="legal-entity-license">License</label>
+                <input
+                  id="legal-entity-license"
+                  value={legalEntityForm.license}
+                  maxLength={MAX_LEGAL_ENTITY_LICENSE_LENGTH}
+                  placeholder="DOI-100245"
+                  onChange={(e) => updateLegalEntityForm('license', e.target.value)}
+                />
+                <span className="eia-field-hint">
+                  Optional. License reference printed on the carrier certificate.
+                </span>
+              </div>
+              <p className="eia-field span-3 eia-legal-entity-modal-note">
+                <b>The legal entity issues and is licensed for the policy.</b> Creating and
+                attaching it is administrative: coverage, limits, premium, and the policy version
+                stay unchanged.
+              </p>
+              <div className="eia-field span-3 eia-modal-actions">
+                <button type="submit" data-testid="submit-legal-entity" disabled={legalEntitySaving}>
+                  {legalEntitySaving ? 'Creating legal entity…' : 'Create and attach legal entity'}
+                </button>
+                <button
+                  type="button"
+                  className="eia-btn-secondary"
+                  onClick={closeLegalEntityCreate}
+                  disabled={legalEntitySaving}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
       {linkPaymentInstallment && selectedPolicy && (
         <LinkPaymentDialog
           policyId={selectedPolicy.id}
@@ -5392,6 +6098,39 @@ function ProgramContextPanel() {
         <b>Capacity, coinsurance, and fronting stay separate.</b> The program is the grouping
         dimension; capacity shares, coinsurance, and fronting arrangements are recorded on their
         own policy structures and are not created or edited here.
+      </p>
+    </section>
+  );
+}
+
+/**
+ * The issuing legal entity is administrative context on the policy. It is the
+ * licensed carrier that writes the policy and owns billing, tax, and regulatory
+ * reporting; assigning or detaching it never edits coverage, limits, premium,
+ * or the policy version, and it creates no capacity or intercompany records.
+ */
+function LegalEntityContextPanel() {
+  return (
+    <section
+      className="eia-context-panel"
+      aria-label="Legal entity context"
+      data-testid="legal-entity-context"
+    >
+      <h4>Legal entity context</h4>
+      <p>
+        <b>The legal entity is the issuing, licensed carrier.</b> It is the carrier that writes
+        the policy and appears on the policy documents; its type, jurisdiction, regulator, and
+        license identify who is licensed to issue the business.
+      </p>
+      <p>
+        <b>Assigning a legal entity does not change coverage or limits.</b> The association is
+        administrative: coverage grants, limits, premium, and the policy version stay on the
+        policy record.
+      </p>
+      <p>
+        <b>Billing, tax, and regulatory reporting use the issuing entity.</b> The legal entity is
+        the reporting carrier, not the group. Capacity, coinsurance, fronting, and intercompany
+        arrangements remain on their own policy structures.
       </p>
     </section>
   );

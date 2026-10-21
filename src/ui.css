@@ -1149,3 +1149,21 @@ a.eia-btn-secondary.eia-billing-payment-link {
   accent-color: var(--eia-blue);
   cursor: pointer;
 }
+
+/* Legal entity: the issuing, licensed carrier on the policy record. */
+.eia-legal-entity-empty { text-align: left; }
+.eia-legal-entity-conflict { margin: 0 0 12px; }
+.eia-legal-entity-modal-note {
+  display: block;
+  margin: 2px 0 0;
+  padding: 9px 11px;
+  border: 1px solid #dce7f0;
+  border-radius: 5px;
+  background: #f4f9fd;
+  color: #496074;
+  font-size: 12px;
+  line-height: 1.5;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}

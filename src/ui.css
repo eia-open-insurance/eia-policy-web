@@ -982,6 +982,41 @@ a.eia-btn-secondary.eia-billing-payment-link {
 }
 .eia-context-panel p + p { margin-top: 6px; }
 
+/* Billing: credit notes reduce premium owed; applying is not a Payment. */
+.eia-credit-notes { margin-top: 18px; }
+.eia-credit-notes .eia-summary-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 520px;
+}
+.eia-credit-notes-toolbar { margin: 12px 0 10px; }
+.eia-credit-note-error {
+  margin: 0 0 10px;
+  padding: 9px 11px;
+  border: 1px solid #f0c9c9;
+  border-radius: 6px;
+  background: #fff7f7;
+  color: #9d2b2b;
+  font-size: 12px;
+}
+.eia-credit-notes-empty { text-align: left; padding: 20px; }
+.eia-credit-notes-empty p { margin: 0 0 6px; }
+.eia-credit-notes-empty p:last-child { margin-bottom: 0; }
+.eia-credit-notes-table td:nth-child(1),
+.eia-credit-notes-table th:nth-child(1),
+.eia-credit-notes-table td:nth-child(5),
+.eia-credit-notes-table th:nth-child(5),
+.eia-credit-notes-table td:nth-child(6),
+.eia-credit-notes-table th:nth-child(6) { white-space: nowrap; }
+.eia-credit-note-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.eia-credit-note-confirm { font-size: 11px; font-weight: 600; color: var(--eia-red); }
+.eia-modal.eia-credit-note-modal { width: min(720px, 100%); }
+.eia-credit-note-modal .eia-context-panel { margin-top: 16px; }
+
 /* Billing: link an existing Payment to a DUE/OVERDUE installment */
 .eia-modal.eia-payment-link-modal { width: min(960px, 100%); }
 .eia-payment-link-state { margin: 10px 0 0; }

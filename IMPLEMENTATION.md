@@ -76,6 +76,22 @@ installment to the Payment workbench through
 Policy never posts a payment, and the plan never changes coverage or the policy
 version.
 
+Credit notes sit at the bottom of the Billing tab, after the installments. The
+section reads `GET /api/v1/policies/{policyId}/credit-notes` alongside the
+billing plan and renders an issued total (ISSUED + APPLIED notes) and an applied
+total (APPLIED notes), plus a table of note number, amount/currency, reason,
+status, issued date, applied date, and actions. An empty ledger is the section's
+empty state, not an unavailable tab. `New credit note` opens a modal whose amount
+defaults to the unpaid premium and whose currency is fixed to the policy premium
+currency; `Save draft` posts `{amount, currency, reason}` to
+`POST /api/v1/policies/{policyId}/credit-notes` with an `Idempotency-Key`.
+`Issue` (DRAFT), `Apply` (ISSUED), and `Cancel` (DRAFT/ISSUED, after an inline
+confirmation) PATCH `{status}` to
+`/api/v1/policies/{policyId}/credit-notes/{creditNoteId}/status`; a 409 re-reads
+the ledger before the operator retries. Credit notes reduce premium owed; they do
+not change the policy premium, coverage, limits, or version, and applying a note
+is an accounting status, not a Payment.
+
 ## Structure
 
 `src/App.jsx` is the whole remote. It has three layers:
@@ -96,7 +112,10 @@ version.
 form validation, tolerant normalization of the billing read (plan, installments,
 summary), status/action rules, the Payment hand-off URL, the policy-payment
 source query, tolerant payment normalization, payment status tone, amount
-comparison for reconciliation, and the link payload. `src/renewal.js`
+comparison for reconciliation, and the link payload. `src/creditNotes.js` holds
+the credit-note reason catalog, form defaults and validation, the create and
+status payloads, status/action rules, and tolerant normalization of the ledger
+read and its summary. `src/renewal.js`
 holds the pure renewal helpers: status eligibility and context, UTC-safe date
 arithmetic, the term/premium form defaults, payload construction, and
 validation. `src/massTort.js` holds the profile's tort, trigger, and allocation
@@ -131,7 +150,12 @@ plan payload, policy premium context, summary, mark paid/waive PATCH payloads,
 overdue rows, the Payment hand-off URL, read failures, 409 conflicts, the
 payment-picker query and tenant header, selection and apply payload, linked
 payment id/number, amount warning, empty state, picker read failure/retry, and a
-409 link conflict; `tests/renewal.spec.js` covers action eligibility by status,
+409 link conflict; `tests/credit-notes.spec.js` covers the empty ledger, the
+create modal's unpaid default and fixed policy currency, the draft POST payload
+and idempotency header, the derived issued/applied totals, issue and apply
+transitions, cancel confirmation for DRAFT and ISSUED notes, the section's
+contained read failure with retry, a create 409 that keeps the dialog open, and a
+status 409 that keeps the row unchanged and reloads the ledger; `tests/renewal.spec.js` covers action eligibility by status,
 modal term and premium/limit defaults, the renewal payload and headers, success
 selection and notice, the predecessor link and its navigation, and the 409
 conflict; `tests/mass-tort.spec.js` covers the not-set empty state and setup
@@ -157,9 +181,9 @@ failure with retry.
   `policy_coverage_block` table (layers, aggregate treatment, sequence) and the
   specialist profile fields (defense strategy, settlement authority, MDL and
   trust references, review cadence) are not rendered yet.
-- The Billing tab covers the premium installment plan only; billing accounts,
-  receivables, dunning, credit notes, commission statements, and disputes are
-  not rendered.
+- The Billing tab covers the premium installment plan and credit notes; billing
+  accounts, receivables, dunning, commission statements, and disputes are not
+  rendered.
 - The Program tab consumes `GET`/`POST /api/v1/programs`,
   `GET /api/v1/programs/{programId}`, and
   `PATCH /api/v1/policies/{policyId}/program`; the current assignment is read

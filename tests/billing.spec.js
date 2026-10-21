@@ -267,6 +267,10 @@ async function installMocks(page, options = {}) {
       await json(route, 200, state.installments.find((row) => row.id === id));
       return;
     }
+    if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}/credit-notes`) {
+      await json(route, 200, { items: [] });
+      return;
+    }
     await route.fulfill({ status: 404, body: `unexpected route ${method} ${url.pathname}` });
   });
 

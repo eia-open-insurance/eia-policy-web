@@ -22,6 +22,23 @@ import {
   validateBillingForm
 } from './billing.js';
 import {
+  CREDIT_NOTE_REASONS,
+  canApplyCreditNote,
+  canCancelCreditNote,
+  canIssueCreditNote,
+  creditNoteEndpoint,
+  creditNoteLabel,
+  creditNotePayload,
+  creditNoteReasonLabel,
+  creditNoteStatusEndpoint,
+  creditNoteStatusPayload,
+  creditNoteStatusTone,
+  defaultCreditNoteForm,
+  emptyCreditNotesState,
+  normalizeCreditNotes,
+  validateCreditNoteForm
+} from './creditNotes.js';
+import {
   ALLOCATION_METHODS,
   MASS_TORT_STATUS,
   MAX_ALLOCATION_NOTES_LENGTH,
@@ -304,6 +321,12 @@ export default function App() {
   const [reinstatements, setReinstatements] = useState([]);
   const [billing, setBilling] = useState(emptyBillingState);
   const billingRequestRef = useRef(0);
+  const [creditNotes, setCreditNotes] = useState(emptyCreditNotesState);
+  const creditNotesRequestRef = useRef(0);
+  const [creditNoteOpen, setCreditNoteOpen] = useState(false);
+  const [creditNoteBusyId, setCreditNoteBusyId] = useState(null);
+  const [creditNoteCancelId, setCreditNoteCancelId] = useState(null);
+  const [creditNoteActionError, setCreditNoteActionError] = useState('');
 
   const [massTort, setMassTort] = useState(emptyMassTortState);
   const massTortRequestRef = useRef(0);
@@ -545,6 +568,7 @@ export default function App() {
       setBillingBusy(false);
       setLinkPaymentInstallment(null);
       setLinkedPayments({});
+      clearCreditNotes();
       clearMassTort();
       setMassTortForm(defaultMassTortForm(null, detail.body));
       clearProgram();
@@ -693,6 +717,59 @@ export default function App() {
   function clearBilling() {
     billingRequestRef.current += 1;
     setBilling(emptyBillingState());
+  }
+
+  /**
+   * Credit notes are policy-level accounting documents read alongside the
+   * billing plan. They keep their own request lifecycle so a slow or missing
+   * credit-note read never hides the plan or the installments. A 404 during
+   * rollout is treated as no notes rather than an unavailable tab.
+   */
+  async function loadCreditNotes(policyId = selected?.id, policy = selected?.policy) {
+    const requestId = creditNotesRequestRef.current + 1;
+    creditNotesRequestRef.current = requestId;
+    if (!policyId) {
+      setCreditNotes(emptyCreditNotesState());
+      return;
+    }
+    setCreditNotes((current) => ({ ...current, loading: true, error: '' }));
+    try {
+      const result = await api(creditNoteEndpoint(policyId));
+      if (creditNotesRequestRef.current !== requestId) return;
+      if (result.response.status === 204 || result.response.status === 404) {
+        setCreditNotes({ ...emptyCreditNotesState(), loading: false });
+        return;
+      }
+      if (!result.response.ok) {
+        setCreditNotes({
+          ...emptyCreditNotesState(),
+          loading: false,
+          error: 'Credit notes are temporarily unavailable.'
+        });
+        return;
+      }
+      setCreditNotes({
+        ...normalizeCreditNotes(result.body, policy),
+        loading: false,
+        error: ''
+      });
+    } catch {
+      if (creditNotesRequestRef.current !== requestId) return;
+      setCreditNotes({
+        ...emptyCreditNotesState(),
+        loading: false,
+        error: 'Credit notes are temporarily unavailable.'
+      });
+    }
+  }
+
+  function clearCreditNotes() {
+    creditNotesRequestRef.current += 1;
+    setCreditNotes(emptyCreditNotesState());
+    setCreditNoteOpen(false);
+    setCreditNoteBusyId(null);
+    setCreditNoteCancelId(null);
+    setCreditNoteActionError('');
   }
 
   /**
@@ -931,7 +1008,10 @@ export default function App() {
         if (!locationResult.response.ok) setError(problemMessage(locationResult.body, 'Location load failed'));
         else setLocations(pageItems(locationResult.body));
       } else if (tabId === 'billing') {
-        await loadBilling(policyId, selected?.id === policyId ? selected.policy : null);
+        await Promise.all([
+          loadBilling(policyId, selected?.id === policyId ? selected.policy : null),
+          loadCreditNotes(policyId, selected?.id === policyId ? selected.policy : null)
+        ]);
       } else if (tabId === 'cancellation') {
         const [cancellationResult, reinstatementResult] = await Promise.all([
           api(`/api/v1/policies/${policyId}/cancellations?page=0&size=50`),
@@ -1004,6 +1084,7 @@ export default function App() {
     setBillingInstallmentId(null);
     setLinkPaymentInstallment(null);
     setLinkedPayments({});
+    clearCreditNotes();
     clearMassTort();
     clearProgram();
   }
@@ -1444,6 +1525,77 @@ export default function App() {
     if (selected?.id) {
       loadBilling(selected.id, selected.policy).catch(() => {});
     }
+  }
+
+  // ---- credit notes -------------------------------------------------
+  function openCreditNoteForm() {
+    setCreditNoteActionError('');
+    setCreditNoteOpen(true);
+  }
+
+  function closeCreditNoteForm() {
+    setCreditNoteOpen(false);
+  }
+
+  /** POST saves the note as a DRAFT; issuing and applying are separate PATCHes. */
+  function creditNoteCreated(resultBody) {
+    const created = resultBody?.creditNote || resultBody;
+    setCreditNoteOpen(false);
+    setCreditNoteActionError('');
+    setNotice(`${creditNoteLabel(created)} saved as draft.`);
+    if (selected?.id) {
+      loadCreditNotes(selected.id, selected.policy).catch(() => {});
+    }
+  }
+
+  /**
+   * Issuing, applying, and cancelling are status transitions on the credit
+   * note. A rejection is contained in the Credit notes section; a 409/404
+   * re-reads the list so a stale row cannot be acted on again.
+   */
+  async function updateCreditNoteStatus(creditNote, status) {
+    if (!selected || !creditNote?.id) return;
+    setCreditNoteActionError('');
+    setNotice('');
+    setCreditNoteBusyId(creditNote.id);
+    try {
+      const result = await api(
+        creditNoteStatusEndpoint(selected.id, creditNote.id),
+        { method: 'PATCH', body: creditNoteStatusPayload(status) }
+      );
+      if (!result.response.ok) {
+        setCreditNoteActionError(problemMessage(
+          result.body,
+          `Credit note update failed: ${result.response.status}`
+        ));
+        if ([404, 409, 410, 412].includes(result.response.status)) {
+          setCreditNoteCancelId(null);
+          await loadCreditNotes(selected.id, selected.policy);
+        }
+        return;
+      }
+      setCreditNoteCancelId(null);
+      const verb = status === 'ISSUED' ? 'issued' : status === 'APPLIED' ? 'applied' : 'cancelled';
+      setNotice(`${creditNoteLabel(creditNote)} ${verb}.`);
+      await Promise.all([
+        loadCreditNotes(selected.id, selected.policy),
+        loadBilling(selected.id, selected.policy)
+      ]);
+    } catch (e) {
+      setCreditNoteActionError(e.message);
+    } finally {
+      setCreditNoteBusyId(null);
+    }
+  }
+
+  function requestCancelCreditNote(creditNote) {
+    if (!creditNote?.id || !canCancelCreditNote(creditNote.status)) return;
+    setCreditNoteActionError('');
+    setCreditNoteCancelId(creditNote.id);
+  }
+
+  function keepCreditNote() {
+    setCreditNoteCancelId(null);
   }
 
   // ---- mass tort profile --------------------------------------------
@@ -3923,6 +4075,23 @@ export default function App() {
                       <BillingContextPanel />
                     </>
                   )}
+
+                  <CreditNotesSection
+                    policy={selectedPolicy}
+                    state={creditNotes}
+                    busyId={creditNoteBusyId}
+                    cancelId={creditNoteCancelId}
+                    actionError={creditNoteActionError}
+                    onRetry={() => loadCreditNotes()}
+                    onNew={openCreditNoteForm}
+                    onIssue={(creditNote) => updateCreditNoteStatus(creditNote, 'ISSUED')}
+                    onApply={(creditNote) => updateCreditNoteStatus(creditNote, 'APPLIED')}
+                    onRequestCancel={requestCancelCreditNote}
+                    onConfirmCancel={(creditNote) => (
+                      updateCreditNoteStatus(creditNote, 'CANCELLED')
+                    )}
+                    onKeep={keepCreditNote}
+                  />
                 </section>
               )}
 
@@ -4419,6 +4588,14 @@ export default function App() {
           onLinked={(payment) => paymentLinked(linkPaymentInstallment, payment)}
         />
       )}
+      {creditNoteOpen && selectedPolicy && (
+        <CreditNoteDialog
+          policy={selectedPolicy}
+          unpaidAmount={billing.summary?.outstandingAmount}
+          onClose={closeCreditNoteForm}
+          onCreated={creditNoteCreated}
+        />
+      )}
     </main>
   );
 }
@@ -4531,6 +4708,391 @@ function BillingContextPanel() {
         <CrossLink href="/payment">Open Payment workbench</CrossLink>
       </div>
     </section>
+  );
+}
+
+/**
+ * Credit notes reduce the premium owed. The section is an accounting ledger:
+ * a note never edits the policy premium or coverage, and applying one changes
+ * the note's accounting status only; it is not a Payment.
+ */
+function CreditNotesSection({
+  policy,
+  state,
+  busyId,
+  cancelId,
+  actionError,
+  onRetry,
+  onNew,
+  onIssue,
+  onApply,
+  onRequestCancel,
+  onConfirmCancel,
+  onKeep
+}) {
+  const currency = state.summary?.currency || policy?.premiumCurrency || '';
+  const items = Array.isArray(state.items) ? state.items : [];
+
+  return (
+    <section className="eia-credit-notes" aria-label="Credit notes" data-testid="credit-notes">
+      <div className="eia-section-title">
+        <h2>Credit notes</h2>
+        <span className="eia-muted">
+          Reduces premium owed · accounting status, not a Payment
+        </span>
+      </div>
+      <p className="eia-billing-policy-context">
+        Credit notes issued against {policy?.policyNumber || 'this policy'} reduce the premium
+        owed. They do not change the policy premium, coverage, limits, or version.
+      </p>
+
+      <div className="eia-summary-grid" aria-label="Credit note summary">
+        <div className="eia-card">
+          <h3>Issued</h3>
+          <div className="value" data-testid="credit-notes-summary-issued">
+            {formatMoney(state.summary?.issuedAmount, currency)}
+          </div>
+          <div className="eia-metric-label">issued and applied credit notes</div>
+        </div>
+        <div className="eia-card">
+          <h3>Applied</h3>
+          <div className="value" data-testid="credit-notes-summary-applied">
+            {formatMoney(state.summary?.appliedAmount, currency)}
+          </div>
+          <div className="eia-metric-label">posted against premium owed</div>
+        </div>
+      </div>
+
+      <div className="eia-toolbar eia-credit-notes-toolbar">
+        <span className="eia-muted">Drafts do not affect premium owed until issued.</span>
+        <span className="spacer" />
+        <button type="button" data-testid="new-credit-note" onClick={onNew}>
+          New credit note
+        </button>
+      </div>
+
+      {actionError && (
+        <p role="alert" className="eia-credit-note-error" data-testid="credit-note-action-error">
+          {actionError}
+        </p>
+      )}
+
+      {state.loading && items.length === 0 ? (
+        <p className="eia-muted" data-testid="credit-notes-loading">Loading credit notes…</p>
+      ) : state.error ? (
+        <section
+          className="eia-card"
+          aria-label="Credit notes unavailable"
+          data-testid="credit-notes-error"
+        >
+          <p role="alert" style={{ marginTop: 0 }}>{state.error}</p>
+          <button type="button" className="eia-btn-secondary" onClick={onRetry}>
+            Retry
+          </button>
+        </section>
+      ) : items.length === 0 ? (
+        <div className="eia-empty eia-credit-notes-empty" data-testid="credit-notes-empty">
+          <p><b>No credit notes yet.</b></p>
+          <p>
+            A credit note reduces the premium the insured owes without changing the policy premium
+            or coverage. Create one to record a cancellation, endorsement, audit return,
+            overpayment, refund, or correction.
+          </p>
+        </div>
+      ) : (
+        <div className="eia-table-wrap">
+          <table className="eia-table eia-credit-notes-table" aria-label="Credit notes">
+            <thead>
+              <tr>
+                <th>Note</th>
+                <th>Amount</th>
+                <th>Reason</th>
+                <th>Status</th>
+                <th>Issued</th>
+                <th>Applied</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((note) => {
+                const busy = busyId === note.id;
+                const confirming = cancelId === note.id;
+                const showActions = canIssueCreditNote(note.status)
+                  || canApplyCreditNote(note.status)
+                  || canCancelCreditNote(note.status);
+                return (
+                  <tr key={note.id} data-testid={`credit-note-row-${note.id}`}>
+                    <td><code className="eia-mono">{note.creditNoteNumber}</code></td>
+                    <td>
+                      {formatMoney(note.amount, note.currency || currency)}
+                      {note.currency || currency ? (
+                        <span className="eia-muted"> {note.currency || currency}</span>
+                      ) : null}
+                    </td>
+                    <td>{note.reasonLabel || creditNoteReasonLabel(note.reason)}</td>
+                    <td>
+                      <span className={`eia-pill ${creditNoteStatusTone(note.status)}`}>
+                        {note.status}
+                      </span>
+                    </td>
+                    <td>{note.issuedDate || '—'}</td>
+                    <td>{note.appliedDate || '—'}</td>
+                    <td>
+                      {confirming ? (
+                        <span
+                          className="eia-credit-note-actions"
+                          role="group"
+                          aria-label={`Confirm cancel ${note.creditNoteNumber}`}
+                        >
+                          <span className="eia-credit-note-confirm">Cancel this credit note?</span>
+                          <button
+                            type="button"
+                            className="eia-btn-secondary"
+                            data-testid={`confirm-cancel-credit-note-${note.id}`}
+                            disabled={busy}
+                            onClick={() => onConfirmCancel(note)}
+                          >
+                            Confirm cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="eia-btn-ghost"
+                            data-testid={`keep-credit-note-${note.id}`}
+                            disabled={busy}
+                            onClick={onKeep}
+                          >
+                            Keep
+                          </button>
+                        </span>
+                      ) : showActions ? (
+                        <span className="eia-credit-note-actions">
+                          {canIssueCreditNote(note.status) && (
+                            <button
+                              type="button"
+                              className="eia-btn-secondary"
+                              data-testid={`issue-credit-note-${note.id}`}
+                              disabled={busy}
+                              onClick={() => onIssue(note)}
+                            >
+                              {busy ? 'Working…' : 'Issue'}
+                            </button>
+                          )}
+                          {canApplyCreditNote(note.status) && (
+                            <button
+                              type="button"
+                              className="eia-btn-secondary"
+                              data-testid={`apply-credit-note-${note.id}`}
+                              disabled={busy}
+                              onClick={() => onApply(note)}
+                            >
+                              {busy ? 'Working…' : 'Apply'}
+                            </button>
+                          )}
+                          {canCancelCreditNote(note.status) && (
+                            <button
+                              type="button"
+                              className="eia-btn-secondary"
+                              data-testid={`cancel-credit-note-${note.id}`}
+                              disabled={busy}
+                              onClick={() => onRequestCancel(note)}
+                            >
+                              Cancel
+                            </button>
+                          )}
+                        </span>
+                      ) : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <section
+        className="eia-context-panel"
+        aria-label="Credit note context"
+        data-testid="credit-note-context"
+      >
+        <h4>Credit note context</h4>
+        <p>
+          <b>A credit note reduces premium owed.</b> The issued and applied totals show how much
+          of the receivable has been credited; the note does not change the policy premium,
+          coverage, limits, or version.
+        </p>
+        <p>
+          <b>Applying is an accounting status.</b> It records the credit against the receivable;
+          it is not a Payment, does not move money, and is not approved here.
+        </p>
+        <p>
+          <b>Only issued notes credit anything.</b> A draft does not change premium owed, and
+          cancelling ends the note without posting a credit.
+        </p>
+      </section>
+    </section>
+  );
+}
+
+/**
+ * New credit notes are saved as drafts. The amount defaults to the unpaid
+ * premium and stays editable; the currency is fixed to the policy premium
+ * currency because the note reduces that receivable.
+ */
+function CreditNoteDialog({ policy, unpaidAmount, onClose, onCreated }) {
+  const [form, setForm] = useState(() => defaultCreditNoteForm(policy, unpaidAmount));
+  const [formError, setFormError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const currency = policy?.premiumCurrency || form.currency || '';
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !saving) onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [saving, onClose]);
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setFormError('');
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    if (saving || !policy?.id) return;
+    const validation = validateCreditNoteForm(form);
+    if (validation) {
+      setFormError(validation);
+      return;
+    }
+    setFormError('');
+    setSaving(true);
+    try {
+      const result = await api(creditNoteEndpoint(policy.id), {
+        method: 'POST',
+        body: creditNotePayload(form, policy),
+        idempotencyKey: newIdempotencyKey()
+      });
+      if (!result.response.ok) {
+        setFormError(problemMessage(
+          result.body,
+          `Credit note creation failed: ${result.response.status}`
+        ));
+        return;
+      }
+      onCreated(result.body);
+    } catch (e) {
+      setFormError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="eia-modal-backdrop">
+      <div
+        className="eia-modal eia-credit-note-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="credit-note-dialog-title"
+        aria-describedby="credit-note-dialog-description"
+        data-testid="credit-note-dialog"
+      >
+        <div className="eia-section-title" style={{ marginTop: 0 }}>
+          <h2 id="credit-note-dialog-title">New credit note</h2>
+          <span className="eia-badge">{policy.policyNumber}</span>
+        </div>
+        <p className="eia-modal-lede" id="credit-note-dialog-description">
+          Save a draft credit note against {policy.policyNumber}. Issuing and applying are
+          separate, audited status changes; no money moves and the policy premium is not edited.
+        </p>
+        <p
+          className="eia-muted eia-modal-currency-context"
+          data-testid="credit-note-default-context"
+        >
+          Policy premium {formatMoney(policy.premiumAmount, policy.premiumCurrency)}
+          {' · '}unpaid <b>{formatMoney(unpaidAmount, currency)}</b>
+        </p>
+
+        {formError && (
+          <p role="alert" className="eia-modal-error" data-testid="credit-note-form-error">
+            {formError}
+          </p>
+        )}
+
+        <form className="eia-form-grid" onSubmit={submit}>
+          <div className="eia-field">
+            <label htmlFor="credit-note-amount">Amount</label>
+            <input
+              id="credit-note-amount"
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={form.amount}
+              onChange={(e) => update('amount', e.target.value)}
+              autoFocus
+              required
+            />
+            <span className="eia-field-hint">
+              Defaults to the unpaid premium. The note reduces premium owed; it does not change
+              the policy premium.
+            </span>
+          </div>
+          <div className="eia-field">
+            <label htmlFor="credit-note-currency">Currency</label>
+            <input
+              id="credit-note-currency"
+              value={currency}
+              readOnly
+              aria-readonly="true"
+            />
+            <span className="eia-field-hint">Fixed to the policy premium currency.</span>
+          </div>
+          <div className="eia-field">
+            <label htmlFor="credit-note-reason">Reason</label>
+            <select
+              id="credit-note-reason"
+              value={form.reason}
+              onChange={(e) => update('reason', e.target.value)}
+            >
+              {CREDIT_NOTE_REASONS.map((entry) => (
+                <option key={entry.value} value={entry.value}>{entry.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="eia-field span-3 eia-modal-actions">
+            <button type="submit" data-testid="save-credit-note" disabled={saving}>
+              {saving ? 'Saving draft…' : 'Save draft'}
+            </button>
+            <button
+              type="button"
+              className="eia-btn-secondary"
+              onClick={onClose}
+              disabled={saving}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+
+        <section
+          className="eia-context-panel"
+          aria-label="New credit note context"
+          data-testid="credit-note-dialog-context"
+        >
+          <h4>What saving a draft does</h4>
+          <p>
+            <b>The note starts in DRAFT.</b> It does not affect premium owed until it is issued,
+            and it does not change the policy premium, coverage, limits, or version.
+          </p>
+          <p>
+            <b>Issuing and applying are accounting status changes.</b> Applying is not a Payment;
+            it records the credit against the receivable and does not move money.
+          </p>
+        </section>
+      </div>
+    </div>
   );
 }
 

@@ -24,6 +24,42 @@ const PROGRAM = {
   description: 'Casualty tower for the 2026 program year.'
 };
 
+const SECOND_POLICY_ID = '99999999-9999-7999-8999-999999999991';
+const THIRD_POLICY_ID = '99999999-9999-7999-8999-999999999992';
+
+/**
+ * A program read may carry the assigned-policy summaries whose limits make up
+ * used capacity. The card sums those limits rather than trusting a cached total.
+ */
+function capacityProgram(overrides = {}) {
+  return {
+    ...PROGRAM,
+    capacityAmount: '10000000.0000',
+    capacityCurrency: 'USD',
+    policies: [
+      {
+        id: POLICY_ID,
+        policyNumber: POLICY_NUMBER,
+        limitAmount: '4000000.0000',
+        limitCurrency: 'USD'
+      },
+      {
+        id: SECOND_POLICY_ID,
+        policyNumber: 'POL-2026-0000002',
+        limitAmount: '3500000.0000',
+        limitCurrency: 'USD'
+      },
+      {
+        id: THIRD_POLICY_ID,
+        policyNumber: 'POL-2026-0000003',
+        limitAmount: '2000000.0000',
+        limitCurrency: 'USD'
+      }
+    ],
+    ...overrides
+  };
+}
+
 function policy(overrides = {}) {
   return {
     id: POLICY_ID,
@@ -181,6 +217,8 @@ async function installMocks(page, options = {}) {
         programType: body.programType,
         effectiveFrom: body.effectiveFrom,
         effectiveTo: body.effectiveTo,
+        capacityAmount: body.capacityAmount || null,
+        capacityCurrency: body.capacityCurrency || null,
         status: 'ACTIVE',
         leadPolicyId: body.leadPolicyId || null,
         leadPolicyNumber: body.leadPolicyId ? POLICY_NUMBER : null
@@ -256,6 +294,8 @@ test('places the Program tab after Overview and shows the no-program state', asy
   await expect(context).toContainText(
     'groups related policies for capacity and aggregate administration'
   );
+  await expect(context).toContainText('Capacity is a program-level limit');
+  await expect(context).toContainText('Used capacity sums assigned policy limits');
   await expect(context).toContainText('does not change coverage or limits');
   await expect(context).toContainText('Capacity, coinsurance, and fronting stay separate');
 });
@@ -321,6 +361,80 @@ test('detaches the current program without touching the rest of the policy', asy
   expect(state.patches[0].body).toEqual({ programId: null });
 });
 
+test('shows capacity, used limits, utilization, and the assigned policy count', async ({ page }) => {
+  await installMocks(page, {
+    withProgram: true,
+    programs: [capacityProgram()]
+  });
+  await openProgramTab(page);
+
+  await expect(page.getByTestId('program-value-capacity')).toHaveText('$10,000,000.00');
+  await expect(page.getByTestId('program-value-used')).toHaveText('$9,500,000.00');
+  await expect(page.getByTestId('program-value-utilization')).toHaveText('95%');
+  await expect(page.getByTestId('program-value-policy-count')).toHaveText('3');
+  await expect(page.getByTestId('program-capacity-not-set')).toHaveCount(0);
+
+  const meter = page.getByTestId('program-capacity-progress');
+  await expect(meter).toBeVisible();
+  await expect(meter).toHaveAttribute('aria-valuemin', '0');
+  await expect(meter).toHaveAttribute('aria-valuemax', '100');
+  await expect(meter).toHaveAttribute('aria-valuenow', '95');
+  await expect(meter).toHaveAttribute('data-over-capacity', 'false');
+  await expect(meter).not.toHaveClass(/over/);
+  await expect(page.getByTestId('program-capacity-label')).toHaveText('95% of capacity used');
+
+  const fill = meter.locator('.eia-program-capacity-track > span');
+  expect(await fill.evaluate((element) => element.style.width)).toBe('95%');
+  expect(await fill.evaluate((element) => getComputedStyle(element).backgroundColor))
+    .toBe('rgb(31, 95, 153)');
+});
+
+test('marks an over-capacity program red and caps the progress bar at 100', async ({ page }) => {
+  await installMocks(page, {
+    withProgram: true,
+    programs: [capacityProgram({
+      policies: [
+        {
+          id: POLICY_ID,
+          policyNumber: POLICY_NUMBER,
+          limitAmount: '7000000.0000',
+          limitCurrency: 'USD'
+        },
+        {
+          id: SECOND_POLICY_ID,
+          policyNumber: 'POL-2026-0000004',
+          limitAmount: '5500000.0000',
+          limitCurrency: 'USD'
+        }
+      ]
+    })]
+  });
+  await openProgramTab(page);
+
+  await expect(page.getByTestId('program-value-capacity')).toHaveText('$10,000,000.00');
+  await expect(page.getByTestId('program-value-used')).toHaveText('$12,500,000.00');
+  await expect(page.getByTestId('program-value-utilization')).toHaveText('125%');
+  await expect(page.getByTestId('program-value-policy-count')).toHaveText('2');
+
+  const meter = page.getByTestId('program-capacity-progress');
+  await expect(meter).toHaveClass(/over/);
+  await expect(meter).toHaveAttribute('data-over-capacity', 'true');
+  await expect(meter).toHaveAttribute('aria-valuenow', '100');
+  await expect(meter).toHaveAttribute(
+    'aria-valuetext',
+    '125% of program capacity used; over capacity'
+  );
+
+  const fill = meter.locator('.eia-program-capacity-track > span');
+  expect(await fill.evaluate((element) => element.style.width)).toBe('100%');
+  expect(await fill.evaluate((element) => getComputedStyle(element).backgroundColor))
+    .toBe('rgb(155, 28, 28)');
+
+  await expect(page.getByTestId('program-capacity-over')).toContainText(
+    'Over capacity by $2,500,000.00.'
+  );
+});
+
 test('creates a program with the policy as the default lead and attaches it', async ({ page }) => {
   const state = await installMocks(page);
   await openProgramTab(page);
@@ -367,6 +481,53 @@ test('creates a program with the policy as the default lead and attaches it', as
   expect(state.posts[0].headers['x-eia-tenant']).toBe(TENANT);
   expect(state.patches).toHaveLength(1);
   expect(state.patches[0].body).toEqual({ programId: CREATED_PROGRAM_ID });
+});
+
+test('creates a program with an optional capacity amount and currency', async ({ page }) => {
+  const state = await installMocks(page);
+  await openProgramTab(page);
+
+  await page.getByTestId('create-program').click();
+  await expect(page.getByLabel('Capacity amount')).toHaveValue('');
+  await expect(page.getByLabel('Capacity currency')).toHaveValue('USD');
+
+  await page.getByLabel('Program name').fill('Capacity Property Program');
+  await page.getByLabel('Program type').selectOption('PROPERTY');
+  await page.getByLabel('Capacity amount').fill('25000000.00');
+  await page.getByLabel('Capacity currency').fill('EUR');
+  await page.getByTestId('submit-program').click();
+
+  await expect(page.getByTestId('program-dialog')).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText(
+    `Created program Capacity Property Program and attached it to ${POLICY_NUMBER}.`
+  );
+
+  expect(state.posts).toHaveLength(1);
+  expect(state.posts[0].body).toEqual({
+    name: 'Capacity Property Program',
+    programType: 'PROPERTY',
+    effectiveFrom: '2026-01-01',
+    effectiveTo: '2027-01-01',
+    capacityAmount: '25000000.00',
+    capacityCurrency: 'EUR',
+    leadPolicyId: POLICY_ID
+  });
+  expect(state.patches).toHaveLength(1);
+  expect(state.patches[0].body).toEqual({ programId: CREATED_PROGRAM_ID });
+
+  // The catalog echoes the program-level capacity on the created program. The
+  // policy limit is untouched: the card has no assigned-policy summaries yet.
+  await expect(page.getByTestId('program-value-capacity')).toHaveText('€25,000,000.00');
+  await expect(page.getByTestId('program-value-used')).toHaveText('—');
+  await expect(page.getByTestId('program-value-utilization')).toHaveText('—');
+  await expect(page.getByTestId('program-value-policy-count')).toHaveText('—');
+  const meter = page.getByTestId('program-capacity-progress');
+  await expect(meter).toBeVisible();
+  await expect(meter).toHaveAttribute('aria-valuenow', '0');
+  await expect(page.getByTestId('program-capacity-label')).toHaveText(
+    'Assigned-policy limits are not available yet.'
+  );
+  await expect(page.getByTestId('program-capacity-not-set')).toHaveCount(0);
 });
 
 test('creates a program without a lead policy when the default is cleared', async ({ page }) => {

@@ -94,21 +94,28 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
 - Program tab after Overview with a no-program empty state, the current
   program's number, name, type, effective dates, status, and lead-policy link,
   and a `Detach program` action.
+- Program capacity card: the program-level capacity amount/currency, the used
+  amount summed from the limits of assigned policies, the utilization
+  percentage (which may exceed 100), and the assigned-policy count. A progress
+  bar fills to 100% and turns red when used limits exceed program capacity.
 - Attach existing program typeahead over `GET /api/v1/programs` with an
   `Attach program` action that sends
   `PATCH /api/v1/policies/{policyId}/program` with `{programId}`; detaching
   sends the same command with `programId: null`.
-- Create program modal (name, type, effective dates, optional lead policy that
-  defaults to the current policy) that posts `POST /api/v1/programs` and then
-  attaches the new program to the current policy. A create/attach split failure
-  keeps the created program selectable in the attach card.
+- Create program modal (name, type, effective dates, optional capacity
+  amount/currency, optional lead policy that defaults to the current policy)
+  that posts `POST /api/v1/programs` and then attaches the new program to the
+  current policy. A create/attach split failure keeps the created program
+  selectable in the attach card.
 - Program context panel stating that a program groups related policies for
-  capacity and aggregate administration and that assigning one does not change
-  coverage or limits.
+  capacity and aggregate administration, that capacity is a program-level limit
+  whose used amount sums assigned policy limits, and that assigning one does
+  not change coverage or policy limits.
 - Playwright coverage for the tab position and empty state, catalog attach with
-  the lead-policy link, detach payload, create defaults/lead policy, create
-  validation, attach rejection and retry, and a contained program read failure
-  with retry.
+  the lead-policy link, detach payload, create defaults/lead policy, capacity
+  amount/currency payload, capacity values and 95% utilization, over-capacity
+  red state at 125% with the bar capped at 100%, create validation, attach
+  rejection and retry, and a contained program read failure with retry.
 - Legal entity tab after Program with a no-entity empty state, the assigned
   entity's code, name, type, jurisdiction, regulator, license, and status, and a
   `Detach` action.

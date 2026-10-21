@@ -10,20 +10,29 @@ cancellation/reinstatement, and an event-derived activity timeline.
 
 The Program tab sits after Overview. The current assignment is read from the
 policy record's `programId`, then `GET /api/v1/programs/{programId}` fills the
-card with the program number, name, type, effective dates, status, and lead
-policy. A policy with no assignment is the tab's empty state, not an error. The
-typeahead reads `GET /api/v1/programs?q=…`, and `Attach program` sends
+card with the program number, name, type, effective dates, status, lead policy,
+and capacity. Capacity is a program-level limit with its own currency. The used
+amount sums the `limitAmount` values of the assigned-policy summaries the
+program read returns (`policies`/`assignedPolicies`, or a pre-aggregated
+`usedAmount` plus `policyCount` when the catalog omits them), and utilization is
+`used / capacity`. The card shows capacity, used, utilization, and policy count,
+with a progress bar capped at 100%; utilization above 100% is labelled and the
+bar turns red. A policy with no assignment is the tab's empty state, not an
+error. The typeahead reads `GET /api/v1/programs?q=…`, and `Attach program` sends
 `PATCH /api/v1/policies/{policyId}/program` with `{programId}`; `Detach program`
 sends the same command with `programId: null`. `Create program` posts
-`{name, programType, effectiveFrom, effectiveTo, leadPolicyId?}` to
-`POST /api/v1/programs` with an `Idempotency-Key` and then attaches the returned
-program id to the current policy. The lead policy is optional and defaults to
-the current policy. If creation succeeds but the attach is rejected, the modal
-closes, the created program stays selected in the attach card, and both outcomes
-are reported so the operator can retry. Program reads are contained in the tab
-with a Retry action. The context panel states that a program groups related
-policies for capacity and aggregate administration and that assigning one does
-not change coverage, limits, premium, or the policy version.
+`{name, programType, effectiveFrom, effectiveTo, capacityAmount?,
+capacityCurrency?, leadPolicyId?}` to `POST /api/v1/programs` with an
+`Idempotency-Key` and then attaches the returned program id to the current
+policy. Capacity is optional; an empty amount omits both capacity members. The
+lead policy is optional and defaults to the current policy. If creation succeeds
+but the attach is rejected, the modal closes, the created program stays selected
+in the attach card, and both outcomes are reported so the operator can retry.
+Program reads are contained in the tab with a Retry action. The context panel
+states that a program groups related policies for capacity and aggregate
+administration, that capacity is a program-level limit whose used amount sums
+assigned policy limits, and that assigning one does not change coverage, policy
+limits, premium, or the policy version.
 
 The Legal entity tab sits after Program and shows the issuing, licensed carrier.
 The current assignment is read from the policy record's `legalEntityId` (the

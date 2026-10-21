@@ -87,12 +87,15 @@ import {
 import {
   MAX_PROGRAM_NAME_LENGTH,
   PROGRAM_TYPES,
+  capacityProgressWidth,
   defaultProgramForm,
   emptyProgramState,
+  formatUtilizationPercent,
   normalizeProgram,
   policyProgramEndpoint,
   policyProgramId,
   programAttachPayload,
+  programCapacitySummary,
   programCreatePayload,
   programDisplayLabel,
   programEndpoint,
@@ -2301,6 +2304,13 @@ export default function App() {
   const massTortProfile = massTort.profile;
   const massTortComplete = isMassTortComplete(massTortProfile);
   const currentProgram = program.program;
+  const currentProgramCapacity = programCapacitySummary(currentProgram);
+  const currentProgramUtilization = formatUtilizationPercent(
+    currentProgramCapacity.utilizationPercent
+  );
+  const currentProgramCapacityWidth = capacityProgressWidth(
+    currentProgramCapacity.utilizationPercent
+  );
   const programLeadPolicyId = currentProgram?.leadPolicyId || '';
   const programLeadPolicyText = programLeadPolicyId
     ? (programLeadPolicy?.id === programLeadPolicyId && programLeadPolicy.number
@@ -3142,6 +3152,104 @@ export default function App() {
                           ) : '—'}
                         </dd>
                       </dl>
+
+                      <div
+                        className="eia-program-capacity"
+                        data-testid="program-capacity"
+                      >
+                        <h3>Program capacity</h3>
+                        <dl className="eia-kv">
+                          <dt>Capacity</dt>
+                          <dd data-testid="program-value-capacity">
+                            {currentProgramCapacity.hasCapacity
+                              ? formatMoney(
+                                currentProgramCapacity.capacityAmount,
+                                currentProgramCapacity.currency
+                              )
+                              : '—'}
+                          </dd>
+                          <dt>Used</dt>
+                          <dd data-testid="program-value-used">
+                            {currentProgramCapacity.usedAmount !== null
+                              ? formatMoney(
+                                currentProgramCapacity.usedAmount,
+                                currentProgramCapacity.usedCurrency
+                              )
+                              : '—'}
+                          </dd>
+                          <dt>Utilization</dt>
+                          <dd data-testid="program-value-utilization">
+                            {currentProgramUtilization}
+                          </dd>
+                          <dt>Policy count</dt>
+                          <dd data-testid="program-value-policy-count">
+                            {currentProgramCapacity.policyCount !== null
+                              ? currentProgramCapacity.policyCount
+                              : '—'}
+                          </dd>
+                        </dl>
+
+                        {currentProgramCapacity.hasCapacity ? (
+                          <div
+                            className={`eia-program-capacity-meter${
+                              currentProgramCapacity.overCapacity
+                                ? ' over over-capacity'
+                                : ''
+                            }`}
+                            role="progressbar"
+                            aria-label="Program capacity utilization"
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={Math.round(currentProgramCapacityWidth)}
+                            aria-valuetext={
+                              currentProgramCapacity.utilizationPercent !== null
+                                ? `${currentProgramUtilization} of program capacity used${
+                                  currentProgramCapacity.overCapacity ? '; over capacity' : ''
+                                }`
+                                : 'Assigned-policy limits are not available yet'
+                            }
+                            data-testid="program-capacity-progress"
+                            data-over-capacity={
+                              currentProgramCapacity.overCapacity ? 'true' : 'false'
+                            }
+                          >
+                            <div className="eia-program-capacity-track">
+                              <span style={{ width: `${currentProgramCapacityWidth}%` }} />
+                            </div>
+                            <p
+                              className="eia-program-capacity-label"
+                              data-testid="program-capacity-label"
+                            >
+                              {currentProgramCapacity.utilizationPercent !== null
+                                ? `${currentProgramUtilization} of capacity used`
+                                : 'Assigned-policy limits are not available yet.'}
+                            </p>
+                          </div>
+                        ) : (
+                          <p
+                            className="eia-muted eia-program-capacity-note"
+                            data-testid="program-capacity-not-set"
+                          >
+                            No program capacity limit is set. Capacity can be added when a
+                            program is created; assigning a policy never changes its limit.
+                          </p>
+                        )}
+
+                        {currentProgramCapacity.overCapacity && (
+                          <p
+                            className="eia-program-capacity-over"
+                            data-testid="program-capacity-over"
+                          >
+                            Over capacity by{' '}
+                            {formatMoney(
+                              Math.abs(currentProgramCapacity.remainingAmount || 0),
+                              currentProgramCapacity.currency
+                            )}
+                            . The program capacity is a program-level limit; no policy limit
+                            was changed.
+                          </p>
+                        )}
+                      </div>
 
                       {programActionError && (
                         <p
@@ -5234,6 +5342,36 @@ export default function App() {
                   Optional. End dates may be left open for a program that continues.
                 </span>
               </div>
+              <div className="eia-field">
+                <label htmlFor="program-capacity-amount">Capacity amount</label>
+                <input
+                  id="program-capacity-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="No capacity limit"
+                  value={programForm.capacityAmount}
+                  onChange={(e) => updateProgramForm('capacityAmount', e.target.value)}
+                />
+                <span className="eia-field-hint">
+                  Optional. A program-level limit; assigned policy limits count toward it.
+                </span>
+              </div>
+              <div className="eia-field">
+                <label htmlFor="program-capacity-currency">Capacity currency</label>
+                <input
+                  id="program-capacity-currency"
+                  maxLength={3}
+                  value={programForm.capacityCurrency}
+                  onChange={(e) => updateProgramForm(
+                    'capacityCurrency',
+                    e.target.value.toUpperCase()
+                  )}
+                />
+                <span className="eia-field-hint">
+                  ISO 4217 code. The policy limit currency is the default.
+                </span>
+              </div>
               <div className="eia-field span-3">
                 <label className="eia-program-lead-toggle" htmlFor="program-lead-policy">
                   <input
@@ -6396,9 +6534,9 @@ function LinkPaymentDialog({ policyId, installment, currency, onClose, onLinked 
 
 /**
  * The program association is administrative context on the policy. A program
- * groups related policies for capacity and aggregate administration; it does
- * not create capacity, coinsurance, or fronting records, and assigning or
- * detaching a program never edits coverage, limits, premium, or the version.
+ * groups related policies for capacity and aggregate administration; it records
+ * a program-level capacity limit while assigning or detaching a policy never
+ * edits that policy's limit, coverage, premium, or version.
  */
 function ProgramContextPanel() {
   return (
@@ -6411,7 +6549,13 @@ function ProgramContextPanel() {
       <p>
         <b>A program groups related policies for capacity and aggregate administration.</b>{' '}
         Policies placed under one program are reviewed and managed as a block, and the program
-        records its own type, effective dates, status, and lead policy.
+        records its own type, effective dates, status, capacity, and lead policy.
+      </p>
+      <p>
+        <b>Capacity is a program-level limit.</b> The capacity amount and currency belong to the
+        program. Used capacity sums assigned policy limits: the card adds the limits of the
+        policies assigned to the program, so it measures the block against its limit; assignment
+        does not change policy limits.
       </p>
       <p>
         <b>Assigning a program does not change coverage or limits.</b> The association is
@@ -6419,9 +6563,9 @@ function ProgramContextPanel() {
         policy record.
       </p>
       <p>
-        <b>Capacity, coinsurance, and fronting stay separate.</b> The program is the grouping
-        dimension; capacity shares, coinsurance, and fronting arrangements are recorded on their
-        own policy structures and are not created or edited here.
+        <b>Capacity, coinsurance, and fronting stay separate.</b> Program capacity is a
+        program-level limit; capacity shares, coinsurance, and fronting arrangements are recorded
+        on their own policy structures and are not created or edited here.
       </p>
     </section>
   );

@@ -169,10 +169,10 @@ async function installMocks(page, options = {}) {
         tenantId: TENANT,
         entityCode: body.code,
         legalName: body.name,
-        entityType: body.type,
+        entityType: body.entityType,
         jurisdiction: body.jurisdiction,
         regulator: body.regulator || null,
-        license: body.license || null,
+        license: body.licenseNumber || null,
         status: 'ACTIVE'
       };
       state.legalEntities = [...state.legalEntities, created];
@@ -353,10 +353,10 @@ test('creates a legal entity from the catalog fields and attaches it', async ({ 
   expect(state.posts[0].body).toEqual({
     code: 'EIA-INS-CA',
     name: 'EIA Insurance Company of California',
-    type: 'INSURER',
+    entityType: 'INSURER',
     jurisdiction: 'US-CA',
     regulator: 'California Department of Insurance',
-    license: 'CA-778899'
+    licenseNumber: 'CA-778899'
   });
   expect(state.posts[0].headers['idempotency-key']).toBeTruthy();
   expect(state.posts[0].headers['x-eia-tenant']).toBe(TENANT);

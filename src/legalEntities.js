@@ -89,13 +89,13 @@ export function legalEntityCreatePayload(form) {
   const payload = {
     code: String(form?.code || '').trim(),
     name: String(form?.name || '').trim(),
-    type: String(form?.type || '').trim().toUpperCase(),
+    entityType: String(form?.type || '').trim().toUpperCase(),
     jurisdiction: String(form?.jurisdiction || '').trim().toUpperCase()
   };
   const regulator = String(form?.regulator || '').trim();
   const license = String(form?.license || '').trim();
   if (regulator) payload.regulator = regulator;
-  if (license) payload.license = license;
+  if (license) payload.licenseNumber = license;
   return payload;
 }
 

@@ -44,7 +44,7 @@ export const MAX_LEGAL_ENTITY_CODE_LENGTH = 16;
 /** Mirrors the legal-entity catalog's `legal_name` column. */
 export const MAX_LEGAL_ENTITY_NAME_LENGTH = 300;
 /** ISO 3166-2 region or regulator code, e.g. `US-DE` or `US-NAIC`. */
-export const MAX_LEGAL_ENTITY_JURISDICTION_LENGTH = 8;
+export const MAX_LEGAL_ENTITY_JURISDICTION_LENGTH = 2;
 /** Mirrors the legal-entity catalog's `regulator` column. */
 export const MAX_LEGAL_ENTITY_REGULATOR_LENGTH = 120;
 /** License reference as printed on the carrier's certificate. */
@@ -154,8 +154,12 @@ export function validateLegalEntityForm(form) {
   if (!String(form?.type || '').trim()) {
     return 'Select the legal entity type before creating the legal entity.';
   }
-  if (!String(form?.jurisdiction || '').trim()) {
+  const jurisdiction = String(form?.jurisdiction || '').trim().toUpperCase();
+  if (!jurisdiction) {
     return 'Enter the jurisdiction before creating the legal entity.';
+  }
+  if (!/^[A-Z]{2}$/.test(jurisdiction)) {
+    return 'Enter a two-letter jurisdiction code.';
   }
   return '';
 }

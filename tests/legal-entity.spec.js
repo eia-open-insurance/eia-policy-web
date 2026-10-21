@@ -14,7 +14,7 @@ const LEGAL_ENTITY = {
   entityCode: 'EIA-INS-US',
   legalName: 'EIA Insurance Company',
   entityType: 'INSURER',
-  jurisdiction: 'US-DE',
+  jurisdiction: 'DE',
   regulator: 'Delaware Department of Insurance',
   license: 'DOI-100245',
   status: 'ACTIVE'
@@ -272,7 +272,7 @@ test('attaches an existing legal entity and shows its issuing details', async ({
   await expect(page.getByTestId('legal-entity-value-code')).toHaveText('EIA-INS-US');
   await expect(page.getByTestId('legal-entity-value-name')).toHaveText('EIA Insurance Company');
   await expect(page.getByTestId('legal-entity-value-type')).toHaveText('Insurer');
-  await expect(page.getByTestId('legal-entity-value-jurisdiction')).toHaveText('US-DE');
+  await expect(page.getByTestId('legal-entity-value-jurisdiction')).toHaveText('DE');
   await expect(page.getByTestId('legal-entity-value-regulator')).toHaveText(
     'Delaware Department of Insurance'
   );
@@ -325,7 +325,7 @@ test('creates a legal entity from the catalog fields and attaches it', async ({ 
   await page.getByLabel('Entity code').fill('EIA-INS-CA');
   await page.getByLabel('Legal name').fill('EIA Insurance Company of California');
   await page.getByLabel('Entity type').selectOption('INSURER');
-  await page.getByLabel('Jurisdiction').fill('US-CA');
+  await page.getByLabel('Jurisdiction').fill('CA');
   await page.getByLabel('Regulator').fill('California Department of Insurance');
   await page.getByLabel('License').fill('CA-778899');
   await page.getByTestId('submit-legal-entity').click();
@@ -342,7 +342,7 @@ test('creates a legal entity from the catalog fields and attaches it', async ({ 
     'EIA Insurance Company of California'
   );
   await expect(page.getByTestId('legal-entity-value-type')).toHaveText('Insurer');
-  await expect(page.getByTestId('legal-entity-value-jurisdiction')).toHaveText('US-CA');
+  await expect(page.getByTestId('legal-entity-value-jurisdiction')).toHaveText('CA');
   await expect(page.getByTestId('legal-entity-value-regulator')).toHaveText(
     'California Department of Insurance'
   );
@@ -354,7 +354,7 @@ test('creates a legal entity from the catalog fields and attaches it', async ({ 
     code: 'EIA-INS-CA',
     name: 'EIA Insurance Company of California',
     entityType: 'INSURER',
-    jurisdiction: 'US-CA',
+    jurisdiction: 'CA',
     regulator: 'California Department of Insurance',
     licenseNumber: 'CA-778899'
   });
@@ -386,7 +386,7 @@ test('validates the create form and keeps the dialog open when the catalog rejec
   await page.getByLabel('Entity code').fill('EIA-INS-US');
   await page.getByLabel('Legal name').fill('Duplicate Carrier');
   await page.getByLabel('Entity type').selectOption('INSURER');
-  await page.getByLabel('Jurisdiction').fill('US-DE');
+  await page.getByLabel('Jurisdiction').fill('DE');
   await page.getByTestId('submit-legal-entity').click();
 
   const formError = page.getByTestId('legal-entity-form-error');
@@ -468,3 +468,4 @@ test('shows a 409 attach conflict inside the tab, reloads, and allows a retry', 
   expect(state.patches).toHaveLength(2);
   expect(state.patches[1].body).toEqual({ legalEntityId: ENTITY_ID });
 });
+

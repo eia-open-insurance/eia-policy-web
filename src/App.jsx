@@ -6,6 +6,7 @@ import ProgramPicker from './ProgramPicker.jsx';
 import {
   BILLING_FREQUENCIES,
   billingFrequencyLabel,
+  billingHasCreditFields,
   billingPaymentHref,
   billingPlanPayload,
   billingStatusTone,
@@ -27,6 +28,7 @@ import {
   canApplyCreditNote,
   canCancelCreditNote,
   canIssueCreditNote,
+  creditNoteAppliedInstallmentLabel,
   creditNoteEndpoint,
   creditNoteLabel,
   creditNotePayload,
@@ -35,6 +37,7 @@ import {
   creditNoteStatusPayload,
   creditNoteStatusTone,
   defaultCreditNoteForm,
+  eligibleInstallmentsForCreditNote,
   emptyCreditNotesState,
   normalizeCreditNotes,
   validateCreditNoteForm
@@ -348,6 +351,8 @@ export default function App() {
   const [creditNotes, setCreditNotes] = useState(emptyCreditNotesState);
   const creditNotesRequestRef = useRef(0);
   const [creditNoteOpen, setCreditNoteOpen] = useState(false);
+  const [creditNoteApply, setCreditNoteApply] = useState(null);
+  const [creditNoteApplyError, setCreditNoteApplyError] = useState('');
   const [creditNoteBusyId, setCreditNoteBusyId] = useState(null);
   const [creditNoteCancelId, setCreditNoteCancelId] = useState(null);
   const [creditNoteActionError, setCreditNoteActionError] = useState('');
@@ -804,6 +809,8 @@ export default function App() {
     creditNotesRequestRef.current += 1;
     setCreditNotes(emptyCreditNotesState());
     setCreditNoteOpen(false);
+    setCreditNoteApply(null);
+    setCreditNoteApplyError('');
     setCreditNoteBusyId(null);
     setCreditNoteCancelId(null);
     setCreditNoteActionError('');
@@ -1735,6 +1742,68 @@ export default function App() {
     if (!creditNote?.id || !canCancelCreditNote(creditNote.status)) return;
     setCreditNoteActionError('');
     setCreditNoteCancelId(creditNote.id);
+  }
+
+  /**
+   * Applying names one open installment that can absorb the whole note. The
+   * picker only offers DUE/OVERDUE rows whose outstanding is at least the note
+   * amount; the credit and outstanding balances are owned by the server. A
+   * 400/409 re-reads the ledger and the billing plan so a stale target cannot be
+   * offered twice, while the rejection stays inside the modal.
+   */
+  function openCreditNoteApply(creditNote) {
+    if (!creditNote?.id || !canApplyCreditNote(creditNote.status)) return;
+    setCreditNoteActionError('');
+    setCreditNoteApplyError('');
+    setCreditNoteApply(creditNote);
+  }
+
+  function closeCreditNoteApply() {
+    if (creditNoteBusyId) return;
+    setCreditNoteApply(null);
+    setCreditNoteApplyError('');
+  }
+
+  async function applyCreditNote(creditNote, installment) {
+    if (!selected || !creditNote?.id || !installment?.id) return;
+    setCreditNoteApplyError('');
+    setNotice('');
+    setCreditNoteBusyId(creditNote.id);
+    try {
+      const result = await api(
+        creditNoteStatusEndpoint(selected.id, creditNote.id),
+        {
+          method: 'PATCH',
+          body: creditNoteStatusPayload('APPLIED', installment.id)
+        }
+      );
+      if (!result.response.ok) {
+        setCreditNoteApplyError(problemMessage(
+          result.body,
+          `Credit note apply failed: ${result.response.status}`
+        ));
+        if ([400, 404, 409, 410, 412].includes(result.response.status)) {
+          await Promise.all([
+            loadCreditNotes(selected.id, selected.policy),
+            loadBilling(selected.id, selected.policy)
+          ]);
+        }
+        return;
+      }
+      setCreditNoteApply(null);
+      setNotice(
+        `${creditNoteLabel(creditNote)} applied to `
+        + `installment ${installment.installmentNumber}.`
+      );
+      await Promise.all([
+        loadCreditNotes(selected.id, selected.policy),
+        loadBilling(selected.id, selected.policy)
+      ]);
+    } catch (e) {
+      setCreditNoteApplyError(e.message);
+    } finally {
+      setCreditNoteBusyId(null);
+    }
   }
 
   function keepCreditNote() {
@@ -4495,6 +4564,16 @@ export default function App() {
                           <div className="eia-metric-label">collected premium</div>
                         </div>
                         <div className="eia-card">
+                          <h3>Credited</h3>
+                          <div className="value" data-testid="billing-summary-credited">
+                            {formatMoney(
+                              billing.summary?.creditedAmount,
+                              billing.summary?.currency
+                            )}
+                          </div>
+                          <div className="eia-metric-label">credit notes applied</div>
+                        </div>
+                        <div className="eia-card">
                           <h3>Outstanding</h3>
                           <div className="value" data-testid="billing-summary-outstanding">
                             {formatMoney(
@@ -4502,7 +4581,7 @@ export default function App() {
                               billing.summary?.currency
                             )}
                           </div>
-                          <div className="eia-metric-label">still to collect</div>
+                          <div className="eia-metric-label">still to collect · net of credits</div>
                         </div>
                         <div className="eia-card eia-billing-overdue-card">
                           <h3>Overdue</h3>
@@ -4533,6 +4612,12 @@ export default function App() {
                               <th>Number</th>
                               <th>Due date</th>
                               <th>Amount</th>
+                              {billingHasCreditFields(billing.installments) && (
+                                <>
+                                  <th>Credited</th>
+                                  <th>Outstanding</th>
+                                </>
+                              )}
                               <th>Status</th>
                               <th>Paid date / payment ID</th>
                               <th>Action</th>
@@ -4559,6 +4644,22 @@ export default function App() {
                                       installment.currency || billing.summary?.currency
                                     )}
                                   </td>
+                                  {billingHasCreditFields(billing.installments) && (
+                                    <>
+                                      <td data-testid={`credited-${installment.id}`}>
+                                        {formatMoney(
+                                          installment.creditedAmount,
+                                          installment.currency || billing.summary?.currency
+                                        )}
+                                      </td>
+                                      <td data-testid={`outstanding-${installment.id}`}>
+                                        {formatMoney(
+                                          installment.outstandingAmount,
+                                          installment.currency || billing.summary?.currency
+                                        )}
+                                      </td>
+                                    </>
+                                  )}
                                   <td>
                                     <span
                                       className={`eia-pill ${billingStatusTone(installment.status)}`}
@@ -4646,7 +4747,10 @@ export default function App() {
                             })}
                             {billing.installments.length === 0 && (
                               <tr>
-                                <td className="eia-muted" colSpan={6}>
+                                <td
+                                  className="eia-muted"
+                                  colSpan={billingHasCreditFields(billing.installments) ? 8 : 6}
+                                >
                                   No installments on this plan.
                                 </td>
                               </tr>
@@ -4668,7 +4772,7 @@ export default function App() {
                     onRetry={() => loadCreditNotes()}
                     onNew={openCreditNoteForm}
                     onIssue={(creditNote) => updateCreditNoteStatus(creditNote, 'ISSUED')}
-                    onApply={(creditNote) => updateCreditNoteStatus(creditNote, 'APPLIED')}
+                    onApply={openCreditNoteApply}
                     onRequestCancel={requestCancelCreditNote}
                     onConfirmCancel={(creditNote) => (
                       updateCreditNoteStatus(creditNote, 'CANCELLED')
@@ -5302,6 +5406,18 @@ export default function App() {
           onCreated={creditNoteCreated}
         />
       )}
+      {creditNoteApply && selectedPolicy && (
+        <ApplyCreditNoteDialog
+          policy={selectedPolicy}
+          creditNote={creditNoteApply}
+          installments={billing.installments}
+          currency={billing.summary?.currency || selectedPolicy.premiumCurrency || ''}
+          busy={creditNoteBusyId === creditNoteApply.id}
+          error={creditNoteApplyError}
+          onClose={closeCreditNoteApply}
+          onApply={applyCreditNote}
+        />
+      )}
     </main>
   );
 }
@@ -5516,6 +5632,7 @@ function CreditNotesSection({
                 <th>Status</th>
                 <th>Issued</th>
                 <th>Applied</th>
+                <th>Installment</th>
                 <th>Action</th>
               </tr>
             </thead>
@@ -5523,6 +5640,7 @@ function CreditNotesSection({
               {items.map((note) => {
                 const busy = busyId === note.id;
                 const confirming = cancelId === note.id;
+                const appliedInstallment = creditNoteAppliedInstallmentLabel(note);
                 const showActions = canIssueCreditNote(note.status)
                   || canApplyCreditNote(note.status)
                   || canCancelCreditNote(note.status);
@@ -5543,6 +5661,16 @@ function CreditNotesSection({
                     </td>
                     <td>{note.issuedDate || '—'}</td>
                     <td>{note.appliedDate || '—'}</td>
+                    <td>
+                      {appliedInstallment ? (
+                        <span
+                          className="eia-mono"
+                          data-testid={`applied-installment-${note.id}`}
+                        >
+                          {appliedInstallment}
+                        </span>
+                      ) : '—'}
+                    </td>
                     <td>
                       {confirming ? (
                         <span
@@ -5626,6 +5754,11 @@ function CreditNotesSection({
           <b>A credit note reduces premium owed.</b> The issued and applied totals show how much
           of the receivable has been credited; the note does not change the policy premium,
           coverage, limits, or version.
+        </p>
+        <p>
+          <b>Applying posts the credit to one installment.</b> The picker offers only DUE or
+          OVERDUE installments whose outstanding is at least the note amount. The note records
+          that installment, and the installment&apos;s credited and outstanding balances move.
         </p>
         <p>
           <b>Applying is an accounting status.</b> It records the credit against the receivable;
@@ -5795,6 +5928,197 @@ function CreditNoteDialog({ policy, unpaidAmount, onClose, onCreated }) {
           <p>
             <b>Issuing and applying are accounting status changes.</b> Applying is not a Payment;
             it records the credit against the receivable and does not move money.
+          </p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Applying an issued credit note posts it against one open installment. The
+ * picker is derived from the latest Billing read: only DUE/OVERDUE rows whose
+ * outstanding can absorb the whole note are offered, and the note amount is
+ * fixed. The server owns the credited and outstanding balances that result.
+ */
+function ApplyCreditNoteDialog({
+  policy,
+  creditNote,
+  installments,
+  currency,
+  busy,
+  error,
+  onClose,
+  onApply
+}) {
+  const [selectedId, setSelectedId] = useState('');
+  const eligible = eligibleInstallmentsForCreditNote(creditNote, installments);
+  const selected = eligible.find((row) => row.id === selectedId) || null;
+  const noteCurrency = creditNote.currency || currency || '';
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !busy) onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [busy, onClose]);
+
+  function submit(event) {
+    event.preventDefault();
+    if (!selected || busy) return;
+    onApply(creditNote, selected);
+  }
+
+  return (
+    <div className="eia-modal-backdrop">
+      <div
+        className="eia-modal eia-credit-note-apply-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="credit-note-apply-title"
+        aria-describedby="credit-note-apply-description"
+        data-testid="credit-note-apply-dialog"
+      >
+        <div className="eia-section-title" style={{ marginTop: 0 }}>
+          <h2 id="credit-note-apply-title">
+            Apply credit note {creditNoteLabel(creditNote)}
+          </h2>
+          <span className="eia-badge">{policy?.policyNumber}</span>
+        </div>
+        <p className="eia-modal-lede" id="credit-note-apply-description">
+          Choose the open installment that receives this credit. Applying marks the note APPLIED
+          and records the credit against that installment; it is not a Payment, moves no money,
+          and does not change the policy premium, coverage, limits, or version.
+        </p>
+        <p
+          className="eia-muted eia-modal-currency-context"
+          data-testid="credit-note-apply-context"
+        >
+          Note amount <b>{formatMoney(creditNote.amount, noteCurrency)}</b>
+          {' · '}status <b>{creditNote.status}</b>
+          {' · '}policy <b>{policy?.policyNumber || '—'}</b>
+        </p>
+
+        {error && (
+          <p role="alert" className="eia-modal-error" data-testid="credit-note-apply-error">
+            {error}
+          </p>
+        )}
+
+        <form onSubmit={submit}>
+          {eligible.length === 0 ? (
+            <div
+              className="eia-empty eia-credit-note-apply-empty"
+              data-testid="credit-note-apply-empty"
+            >
+              <p><b>No eligible installment.</b></p>
+              <p>
+                Only DUE or OVERDUE installments whose outstanding is at least{' '}
+                {formatMoney(creditNote.amount, noteCurrency)} can absorb this credit note.
+                Re-read the billing plan before retrying.
+              </p>
+            </div>
+          ) : (
+            <div className="eia-table-wrap">
+              <table
+                className="eia-table eia-credit-note-installments"
+                aria-label="Eligible installments"
+              >
+                <thead>
+                  <tr>
+                    <th>Select</th>
+                    <th>Installment</th>
+                    <th>Due date</th>
+                    <th>Outstanding</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {eligible.map((installment) => (
+                    <tr
+                      key={installment.id}
+                      className={selectedId === installment.id ? 'selected' : undefined}
+                      data-testid={`apply-installment-row-${installment.id}`}
+                    >
+                      <td>
+                        <input
+                          type="radio"
+                          name="apply-credit-note"
+                          value={installment.id}
+                          aria-label={`Select installment ${installment.installmentNumber}`}
+                          checked={selectedId === installment.id}
+                          onChange={() => setSelectedId(installment.id)}
+                          disabled={busy}
+                        />
+                      </td>
+                      <td>{installment.installmentNumber}</td>
+                      <td className="eia-nowrap">{installment.dueDate || '—'}</td>
+                      <td className="eia-nowrap">
+                        {formatMoney(
+                          installment.outstandingAmount,
+                          installment.currency || noteCurrency
+                        )}
+                        {installment.creditedAmount > 0 && (
+                          <span
+                            className="eia-billing-credit-detail"
+                            data-testid={`apply-credited-${installment.id}`}
+                          >
+                            credited {formatMoney(
+                              installment.creditedAmount,
+                              installment.currency || noteCurrency
+                            )}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`eia-pill ${billingStatusTone(installment.status)}`}>
+                          {installment.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="eia-modal-actions">
+            {eligible.length > 0 && (
+              <button
+                type="submit"
+                data-testid="confirm-apply-credit-note"
+                disabled={!selected || busy}
+              >
+                {busy ? 'Applying…' : 'Apply credit note'}
+              </button>
+            )}
+            <button
+              type="button"
+              className="eia-btn-secondary"
+              onClick={onClose}
+              disabled={busy}
+            >
+              {eligible.length === 0 ? 'Close' : 'Cancel'}
+            </button>
+          </div>
+        </form>
+
+        <section
+          className="eia-context-panel"
+          aria-label="Credit note application context"
+          data-testid="credit-note-apply-context-panel"
+        >
+          <h4>What applying does</h4>
+          <p>
+            <b>Posts the credit to one installment.</b> The installment records the credit and its
+            outstanding balance falls; the policy premium and scheduled installment amount stay
+            unchanged.
+          </p>
+          <p>
+            <b>Only a covering installment is offered.</b> The note cannot be split across
+            installments here, so its full amount must fit within the selected outstanding
+            balance.
           </p>
         </section>
       </div>

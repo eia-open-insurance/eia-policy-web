@@ -96,11 +96,43 @@ function normalizeInstallment(row, index, fallbackCurrency) {
     row.dueAmount,
     row.expectedAmount
   );
+  const amountNumber = numeric(amount);
+  // A credit note reduces the receivable, never the scheduled installment amount.
+  // The server may send either the credited total, the net outstanding, or both;
+  // the missing side is derived so a partially rolled-out read still renders.
+  const rawCredited = firstDefined(
+    row.creditedAmount,
+    row.creditAmount,
+    row.credited,
+    row.totalCreditedAmount,
+    row.creditNoteAmount
+  );
+  const rawOutstanding = firstDefined(
+    row.outstandingAmount,
+    row.netAmount,
+    row.balanceAmount,
+    row.remainingAmount
+  );
+  const explicitCredited = numeric(rawCredited);
+  const explicitOutstanding = numeric(rawOutstanding);
+  const creditedAmount = explicitCredited !== null
+    ? Math.max(explicitCredited, 0)
+    : explicitOutstanding !== null && amountNumber !== null
+      ? Math.max(amountNumber - explicitOutstanding, 0)
+      : 0;
+  const outstandingAmount = explicitOutstanding !== null
+    ? Math.max(explicitOutstanding, 0)
+    : amountNumber === null
+      ? null
+      : Math.max(amountNumber - creditedAmount, 0);
   return {
     id: String(row.id || row.installmentId || `installment-${number}`),
     installmentNumber: Number.isFinite(installmentNumber) ? installmentNumber : index + 1,
     dueDate: dateOnly(row.dueDate || row.dueOn || ''),
     amount: amount === undefined ? null : amount,
+    creditedAmount,
+    outstandingAmount,
+    hasCreditFields: rawCredited !== undefined || rawOutstanding !== undefined,
     currency: row.currency || fallbackCurrency || '',
     status: String(row.status || 'DUE').toUpperCase(),
     paidDate: dateOnly(row.paidDate || row.paidOn || row.paymentDate || row.paidAt || ''),
@@ -202,6 +234,14 @@ export function normalizeBilling(body, policy) {
     summaryBody.totalWaived,
     summaryBody.waived
   );
+  const credited = firstDefined(
+    summaryBody.creditedAmount,
+    summaryBody.totalCreditedAmount,
+    summaryBody.creditedTotalAmount,
+    summaryBody.creditedTotal,
+    summaryBody.totalCredited,
+    summaryBody.credited
+  );
   const outstanding = firstDefined(
     summaryBody.outstandingAmount,
     summaryBody.totalOutstandingAmount,
@@ -218,9 +258,34 @@ export function normalizeBilling(body, policy) {
   const totalNumber = numeric(total);
   const paidNumber = numeric(paid) ?? amountForStatus(installments, 'PAID');
   const waivedNumber = numeric(waived) ?? amountForStatus(installments, 'WAIVED');
+  const outstandingNumber = numeric(outstanding);
+  const rowCreditedTotal = installments.reduce(
+    (sum, row) => sum + (numeric(row.creditedAmount) || 0),
+    0
+  );
+  // When the server sends the net outstanding but omits the credited total, the
+  // difference against premium less paid/waived is the credited amount. The
+  // summary table always shows a credited figure, never a blank metric.
+  const creditedNumber = numeric(credited) ?? (
+    rowCreditedTotal > 0
+      ? rowCreditedTotal
+      : outstandingNumber !== null && totalNumber !== null
+        ? Math.max(totalNumber - paidNumber - waivedNumber - outstandingNumber, 0)
+        : 0
+  );
   const computedOutstanding = totalNumber === null
     ? null
-    : Math.max(totalNumber - paidNumber - waivedNumber, 0);
+    : Math.max(totalNumber - paidNumber - waivedNumber - creditedNumber, 0);
+  // A summary may still carry the gross scheduled outstanding while adding the
+  // credited total. Outstanding is always the net receivable, so clamp the
+  // server value to premium less paid/waived/credited when credits exist.
+  const outstandingAmount = creditedNumber > 0 && computedOutstanding !== null
+    ? outstandingNumber === null
+      ? computedOutstanding
+      : Math.min(outstandingNumber, computedOutstanding)
+    : outstandingNumber === null
+      ? computedOutstanding
+      : outstandingNumber;
 
   return {
     plan,
@@ -229,9 +294,8 @@ export function normalizeBilling(body, policy) {
       currency: firstDefined(summaryBody.currency, plan?.currency, policy?.premiumCurrency) || '',
       totalPremiumAmount: decimalString(total),
       paidAmount: decimalString(paidNumber),
-      outstandingAmount: decimalString(
-        outstanding === undefined || outstanding === null ? computedOutstanding : outstanding
-      ),
+      creditedAmount: decimalString(creditedNumber),
+      outstandingAmount: decimalString(outstandingAmount),
       overdueAmount: decimalString(
         overdue === undefined || overdue === null
           ? amountForStatus(installments, 'OVERDUE')
@@ -252,6 +316,16 @@ export function normalizeBilling(body, policy) {
 
 export function emptyBillingState() {
   return { plan: null, installments: [], summary: null, loading: false, error: '' };
+}
+
+/**
+ * The credited/outstanding columns appear only when the billing read carries
+ * those fields. Older servers keep the original six-column table.
+ */
+export function billingHasCreditFields(installments) {
+  return (Array.isArray(installments) ? installments : []).some(
+    (row) => row?.hasCreditFields || (numeric(row?.creditedAmount) || 0) > 0
+  );
 }
 
 export function billingStatusTone(status) {

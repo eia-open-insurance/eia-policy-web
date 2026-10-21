@@ -12,10 +12,14 @@
  *
  * A credit note carries `id`, a note number (`creditNoteNumber` or `noteNumber`),
  * `amount`, `currency`, a `reason`, a `status`, and the `issuedDate` and
- * `appliedDate` stamps. The list read may be a bare array, an `{items}` page
- * envelope, or a `{creditNotes: …}` wrapper; the summary may be supplied by the
- * server or derived from the rows.
+ * `appliedDate` stamps. Applying an issued note also names the open installment
+ * that absorbs it (`installmentId` on the PATCH, `appliedInstallmentId` and
+ * `appliedInstallmentNumber` on the read). The list read may be a bare array, an
+ * `{items}` page envelope, or a `{creditNotes: …}` wrapper; the summary may be
+ * supplied by the server or derived from the rows.
  */
+
+import { canManageInstallment } from './billing.js';
 
 export const CREDIT_NOTE_REASONS = [
   { value: 'CANCELLATION', label: 'Cancellation' },
@@ -52,8 +56,15 @@ export function creditNoteStatusEndpoint(policyId, creditNoteId) {
     + `${encodeURIComponent(creditNoteId)}/status`;
 }
 
-export function creditNoteStatusPayload(status) {
-  return { status: String(status || '').toUpperCase() };
+/**
+ * Issuing and cancelling send only the target status. Applying also names the
+ * open installment that receives the credit; the server owns the credited and
+ * outstanding balances that result from it.
+ */
+export function creditNoteStatusPayload(status, installmentId) {
+  const payload = { status: String(status || '').toUpperCase() };
+  if (installmentId) payload.installmentId = String(installmentId);
+  return payload;
 }
 
 export function creditNoteReasonLabel(value) {
@@ -114,6 +125,44 @@ export function canApplyCreditNote(status) {
 export function canCancelCreditNote(status) {
   const normalized = String(status || '').toUpperCase();
   return normalized === CREDIT_NOTE_STATUS.DRAFT || normalized === CREDIT_NOTE_STATUS.ISSUED;
+}
+
+/** The installment an applied note names, when the read carries one. */
+export function creditNoteAppliedInstallmentLabel(creditNote) {
+  const number = firstText(creditNote?.appliedInstallmentNumber);
+  if (number) return `Installment ${number}`;
+  const id = firstText(creditNote?.appliedInstallmentId);
+  return id ? `Installment ${id}` : '';
+}
+
+/** Net amount still collectible on one installment; credits reduce it. */
+export function installmentOutstandingAmount(installment) {
+  const outstanding = numeric(installment?.outstandingAmount);
+  if (outstanding !== null) return Math.max(outstanding, 0);
+  const amount = numeric(installment?.amount);
+  if (amount === null) return null;
+  return Math.max(amount - (numeric(installment?.creditedAmount) || 0), 0);
+}
+
+/**
+ * A note can only be applied to a DUE/OVERDUE installment whose outstanding can
+ * absorb the whole note. Comparing integer cents avoids a float-rounded offer.
+ */
+export function canApplyCreditNoteToInstallment(creditNote, installment) {
+  const amount = numeric(creditNote?.amount);
+  if (amount === null || amount <= 0) return false;
+  if (!installment?.id || !canManageInstallment(installment.status)) return false;
+  const outstanding = installmentOutstandingAmount(installment);
+  if (outstanding === null || outstanding <= 0) return false;
+  return Math.round(outstanding * 100) >= Math.round(amount * 100);
+}
+
+export function eligibleInstallmentsForCreditNote(creditNote, installments) {
+  return (Array.isArray(installments) ? installments : [])
+    .filter((row) => canApplyCreditNoteToInstallment(creditNote, row))
+    .sort((left, right) => (
+      (Number(left.installmentNumber) || 0) - (Number(right.installmentNumber) || 0)
+    ));
 }
 
 export function creditNoteStatusTone(status) {
@@ -182,6 +231,11 @@ function normalizeCreditNote(row, fallbackCurrency) {
     id
   );
   const reason = firstText(row.reason, row.creditReason).toUpperCase();
+  const appliedInstallment = row.appliedInstallment
+    && typeof row.appliedInstallment === 'object'
+    && !Array.isArray(row.appliedInstallment)
+    ? row.appliedInstallment
+    : {};
   return {
     id,
     creditNoteNumber: number,
@@ -204,6 +258,21 @@ function normalizeCreditNote(row, fallbackCurrency) {
       row.appliedAt,
       ''
     )),
+    appliedInstallmentId: firstText(
+      row.appliedInstallmentId,
+      row.installmentId,
+      row.appliedToInstallmentId,
+      row.creditInstallmentId,
+      appliedInstallment.id,
+      appliedInstallment.installmentId
+    ),
+    appliedInstallmentNumber: firstText(
+      row.appliedInstallmentNumber,
+      row.installmentNumber,
+      row.appliedInstallmentNo,
+      appliedInstallment.installmentNumber,
+      appliedInstallment.number
+    ),
     createdDate: dateOnly(firstDefined(row.createdAt, row.createdOn, row.createdDate, '')),
     originalInvoiceNumber: firstText(row.originalInvoiceNumber, row.invoiceNumber)
   };

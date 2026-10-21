@@ -87,10 +87,12 @@ function summarize(rows) {
     .reduce((sum, row) => sum + Number(row.amount), 0);
   const paid = amountFor('PAID');
   const waived = amountFor('WAIVED');
+  const credited = rows.reduce((sum, row) => sum + Number(row.creditedAmount || 0), 0);
   return {
     totalPremiumAmount: total.toFixed(2),
     paidAmount: paid.toFixed(2),
-    outstandingAmount: Math.max(total - paid - waived, 0).toFixed(2),
+    creditedAmount: credited.toFixed(2),
+    outstandingAmount: Math.max(total - paid - waived - credited, 0).toFixed(2),
     overdueAmount: amountFor('OVERDUE').toFixed(2),
     currency: PLAN.currency,
     installmentCount: rows.length,
@@ -99,8 +101,13 @@ function summarize(rows) {
   };
 }
 
-function billingBody(rows) {
-  return { plan: PLAN, installments: rows, summary: summarize(rows) };
+function billingBody(rows, summaryOverrides = {}) {
+  const summary = summarize(rows);
+  Object.entries(summaryOverrides).forEach(([key, value]) => {
+    if (value === undefined) delete summary[key];
+    else summary[key] = value;
+  });
+  return { plan: PLAN, installments: rows, summary };
 }
 
 function envelope(items) {
@@ -151,6 +158,7 @@ async function installMocks(page, options = {}) {
     creditNotePatches: [],
     readStatus: options.readStatus || 200,
     readError: options.readError || null,
+    summaryOverrides: options.summaryOverrides || {},
     postStatus: options.postStatus || 201,
     postError: options.postError || null,
     patchStatus: options.patchStatus || 200,
@@ -186,7 +194,7 @@ async function installMocks(page, options = {}) {
     }
     if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}/billing`) {
       state.billingGets += 1;
-      await json(route, 200, billingBody(state.installments));
+      await json(route, 200, billingBody(state.installments, state.summaryOverrides));
       return;
     }
     if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}/credit-notes`) {
@@ -255,7 +263,20 @@ async function installMocks(page, options = {}) {
       }
       note.status = String(body.status || '').toUpperCase();
       if (note.status === 'ISSUED') note.issuedDate = '2026-10-20';
-      if (note.status === 'APPLIED') note.appliedDate = '2026-10-20';
+      if (note.status === 'APPLIED') {
+        note.appliedDate = '2026-10-20';
+        const target = state.installments.find((row) => row.id === body.installmentId);
+        if (target) {
+          const credited = Number(target.creditedAmount || 0) + Number(note.amount);
+          target.creditedAmount = credited.toFixed(2);
+          target.outstandingAmount = Math.max(
+            Number(target.amount) - credited,
+            0
+          ).toFixed(2);
+          note.appliedInstallmentId = target.id;
+          note.appliedInstallmentNumber = String(target.installmentNumber);
+        }
+      }
       await json(route, 200, note);
       return;
     }
@@ -390,6 +411,7 @@ test('renders the credit note ledger after installments and summarises issued an
     'Status',
     'Issued',
     'Applied',
+    'Installment',
     'Action'
   ]);
   const issuedRow = page.getByTestId(`credit-note-row-${NOTE_ID}`);
@@ -425,11 +447,31 @@ test('issues and applies a credit note through contained status transitions', as
 
   await row.getByTestId(`apply-credit-note-${NOTE_ID}`).click();
 
-  await expect(page.getByRole('status')).toContainText(`${NOTE_NUMBER} applied.`);
+  const applyDialog = page.getByTestId('credit-note-apply-dialog');
+  await expect(applyDialog).toBeVisible();
+  await expect(applyDialog.getByRole('heading', {
+    name: `Apply credit note ${NOTE_NUMBER}`
+  })).toBeVisible();
+  await expect(applyDialog.getByRole('radio', { name: 'Select installment 1' })).toBeVisible();
+  await expect(applyDialog.getByRole('radio', { name: 'Select installment 2' })).toBeVisible();
+  const confirmApply = applyDialog.getByTestId('confirm-apply-credit-note');
+  await expect(confirmApply).toBeDisabled();
+  await applyDialog.getByRole('radio', { name: 'Select installment 1' }).check();
+  await expect(confirmApply).toBeEnabled();
+  await confirmApply.click();
+
+  await expect(page.getByRole('status')).toContainText(
+    `${NOTE_NUMBER} applied to installment 1.`
+  );
+  await expect(applyDialog).toHaveCount(0);
   await expect(row).toContainText('APPLIED');
+  await expect(row.getByTestId(`applied-installment-${NOTE_ID}`)).toHaveText('Installment 1');
   await expect(page.getByTestId('credit-notes-summary-issued')).toHaveText('$25,000.00');
   await expect(page.getByTestId('credit-notes-summary-applied')).toHaveText('$25,000.00');
-  await expect(row.getByText('—', { exact: true })).toHaveCount(1);
+  await expect(page.getByTestId('billing-summary-credited')).toHaveText('$25,000.00');
+  await expect(page.getByTestId('billing-summary-outstanding')).toHaveText('$95,000.00');
+  await expect(page.getByTestId('credited-installment-1')).toHaveText('$25,000.00');
+  await expect(page.getByTestId('outstanding-installment-1')).toHaveText('$5,000.00');
 
   expect(state.creditNotePatches).toHaveLength(2);
   expect(state.creditNotePatches[0]).toMatchObject({
@@ -438,9 +480,272 @@ test('issues and applies a credit note through contained status transitions', as
   });
   expect(state.creditNotePatches[1]).toMatchObject({
     path: `/api/v1/policies/${POLICY_ID}/credit-notes/${NOTE_ID}/status`,
-    body: { status: 'APPLIED' }
+    body: { status: 'APPLIED', installmentId: 'installment-1' }
   });
   expect(state.creditNotePatches[0].headers['x-eia-tenant']).toBe(TENANT);
+});
+
+test('shows credited and net outstanding in the billing summary and installments', async ({ page }) => {
+  await installMocks(page, {
+    installments: [
+      installment(1, { creditedAmount: '5000.00', outstandingAmount: '25000.00' }),
+      installment(2, { creditedAmount: '10000.00' }),
+      installment(3),
+      installment(4, {
+        status: 'PAID',
+        paidDate: '2026-03-15',
+        paymentId: 'ffffffff-ffff-7fff-8fff-ffffffffffff'
+      })
+    ],
+    // The summary omits the credited total and still carries the gross
+    // outstanding. The tab derives credited 15,000 from the rows and shows the
+    // net outstanding 120,000 - 30,000 paid - 15,000 credited = 75,000.
+    summaryOverrides: { creditedAmount: undefined, outstandingAmount: '90000.00' }
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-summary-total')).toHaveText('$120,000.00');
+  await expect(page.getByTestId('billing-summary-paid')).toHaveText('$30,000.00');
+  await expect(page.getByTestId('billing-summary-credited')).toHaveText('$15,000.00');
+  await expect(page.getByTestId('billing-summary-outstanding')).toHaveText('$75,000.00');
+  await expect(page.getByTestId('billing-summary-outstanding').locator('..'))
+    .toContainText('net of credits');
+
+  const table = page.getByRole('table', { name: 'Billing installments' });
+  await expect(table.getByRole('columnheader')).toHaveText([
+    'Number',
+    'Due date',
+    'Amount',
+    'Credited',
+    'Outstanding',
+    'Status',
+    'Paid date / payment ID',
+    'Action'
+  ]);
+  await expect(page.getByTestId('credited-installment-1')).toHaveText('$5,000.00');
+  await expect(page.getByTestId('outstanding-installment-1')).toHaveText('$25,000.00');
+  await expect(page.getByTestId('credited-installment-2')).toHaveText('$10,000.00');
+  await expect(page.getByTestId('outstanding-installment-2')).toHaveText('$20,000.00');
+  await expect(page.getByTestId('credited-installment-3')).toHaveText('$0.00');
+  await expect(page.getByTestId('outstanding-installment-3')).toHaveText('$30,000.00');
+});
+
+function applyInstallments() {
+  return [
+    installment(1, { status: 'DUE', amount: '30000.00' }),
+    installment(2, {
+      status: 'DUE',
+      amount: '30000.00',
+      creditedAmount: '10000.00',
+      outstandingAmount: '20000.00'
+    }),
+    installment(3, {
+      status: 'PAID',
+      paidDate: '2026-03-15',
+      paymentId: 'ffffffff-ffff-7fff-8fff-ffffffffffff'
+    }),
+    installment(4, {
+      status: 'OVERDUE',
+      amount: '30000.00',
+      creditedAmount: '5000.00'
+    })
+  ];
+}
+
+function issuedNote(overrides = {}) {
+  return creditNote({
+    id: NOTE_ID,
+    status: 'ISSUED',
+    issuedDate: '2026-10-01',
+    ...overrides
+  });
+}
+
+test('apply picker offers only open installments whose outstanding covers the note', async ({ page }) => {
+  await installMocks(page, {
+    installments: applyInstallments(),
+    notes: [issuedNote()]
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId(`apply-credit-note-${NOTE_ID}`).click();
+  const dialog = page.getByTestId('credit-note-apply-dialog');
+
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId('credit-note-apply-context')).toContainText('$25,000.00');
+  await expect(dialog.getByRole('table', { name: 'Eligible installments' })).toBeVisible();
+  await expect(dialog.getByRole('radio')).toHaveCount(2);
+  await expect(dialog.getByRole('radio', { name: 'Select installment 1' })).toBeVisible();
+  await expect(dialog.getByRole('radio', { name: 'Select installment 4' })).toBeVisible();
+  await expect(dialog.getByRole('radio', { name: 'Select installment 2' })).toHaveCount(0);
+  await expect(dialog.getByTestId('apply-installment-row-installment-2')).toHaveCount(0);
+  await expect(dialog.getByTestId('apply-installment-row-installment-3')).toHaveCount(0);
+  await expect(dialog.getByTestId('apply-credited-installment-4')).toContainText(
+    'credited $5,000.00'
+  );
+  await expect(dialog.getByTestId('apply-installment-row-installment-4')).toContainText(
+    '$25,000.00'
+  );
+
+  const confirmApply = dialog.getByTestId('confirm-apply-credit-note');
+  await expect(confirmApply).toBeDisabled();
+  await dialog.getByRole('radio', { name: 'Select installment 1' }).check();
+  await expect(confirmApply).toBeEnabled();
+  await expect(dialog.getByTestId('apply-installment-row-installment-1')).toHaveClass(/selected/);
+});
+
+test('apply modal explains when no open installment can absorb the note', async ({ page }) => {
+  await installMocks(page, {
+    installments: [
+      installment(1, { amount: '10000.00' }),
+      installment(2, {
+        amount: '10000.00',
+        status: 'PAID',
+        paidDate: '2026-03-15',
+        paymentId: 'ffffffff-ffff-7fff-8fff-ffffffffffff'
+      })
+    ],
+    notes: [issuedNote({ amount: '50000.00' })]
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId(`apply-credit-note-${NOTE_ID}`).click();
+  const dialog = page.getByTestId('credit-note-apply-dialog');
+  await expect(dialog.getByTestId('credit-note-apply-empty')).toContainText(
+    'No eligible installment'
+  );
+  await expect(dialog.getByTestId('confirm-apply-credit-note')).toHaveCount(0);
+  await expect(dialog.getByRole('table', { name: 'Eligible installments' })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Close' }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
+test('applies a partial credit note to the selected installment with its id and refreshes balances', async ({ page }) => {
+  const state = await installMocks(page, {
+    installments: applyInstallments(),
+    notes: [issuedNote()]
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId(`apply-credit-note-${NOTE_ID}`).click();
+  const dialog = page.getByTestId('credit-note-apply-dialog');
+  await dialog.getByRole('radio', { name: 'Select installment 1' }).check();
+  await dialog.getByTestId('confirm-apply-credit-note').click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText(
+    `${NOTE_NUMBER} applied to installment 1.`
+  );
+  const row = page.getByTestId(`credit-note-row-${NOTE_ID}`);
+  await expect(row).toContainText('APPLIED');
+  await expect(row.getByTestId(`applied-installment-${NOTE_ID}`)).toHaveText('Installment 1');
+
+  expect(state.creditNotePatches).toHaveLength(1);
+  expect(state.creditNotePatches[0]).toMatchObject({
+    path: `/api/v1/policies/${POLICY_ID}/credit-notes/${NOTE_ID}/status`,
+    body: { status: 'APPLIED', installmentId: 'installment-1' }
+  });
+  expect(state.billingGets).toBe(2);
+  expect(state.creditNoteGets).toBe(2);
+  await expect(page.getByTestId('billing-summary-credited')).toHaveText('$40,000.00');
+  await expect(page.getByTestId('billing-summary-outstanding')).toHaveText('$50,000.00');
+  await expect(page.getByTestId('credited-installment-1')).toHaveText('$25,000.00');
+  await expect(page.getByTestId('outstanding-installment-1')).toHaveText('$5,000.00');
+});
+
+test('applies a credit note that exactly equals the installment outstanding', async ({ page }) => {
+  const state = await installMocks(page, {
+    installments: applyInstallments(),
+    notes: [issuedNote()]
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId(`apply-credit-note-${NOTE_ID}`).click();
+  const dialog = page.getByTestId('credit-note-apply-dialog');
+  await dialog.getByRole('radio', { name: 'Select installment 4' }).check();
+  await dialog.getByTestId('confirm-apply-credit-note').click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText(
+    `${NOTE_NUMBER} applied to installment 4.`
+  );
+  await expect(
+    page.getByTestId(`credit-note-row-${NOTE_ID}`).getByTestId(`applied-installment-${NOTE_ID}`)
+  ).toHaveText('Installment 4');
+  expect(state.creditNotePatches).toHaveLength(1);
+  expect(state.creditNotePatches[0].body).toEqual({
+    status: 'APPLIED',
+    installmentId: 'installment-4'
+  });
+  await expect(page.getByTestId('billing-summary-credited')).toHaveText('$40,000.00');
+  await expect(page.getByTestId('billing-summary-outstanding')).toHaveText('$50,000.00');
+  await expect(page.getByTestId('credited-installment-4')).toHaveText('$30,000.00');
+  await expect(page.getByTestId('outstanding-installment-4')).toHaveText('$0.00');
+});
+
+test('keeps the apply modal open and re-reads on a 409 conflict', async ({ page }) => {
+  const state = await installMocks(page, {
+    installments: applyInstallments(),
+    notes: [issuedNote()],
+    patchStatus: 409,
+    patchError: problem(
+      409,
+      'Installment 1 was credited by another user while this note was open.',
+      'CREDIT_NOTE_CONFLICT'
+    )
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId(`apply-credit-note-${NOTE_ID}`).click();
+  const dialog = page.getByTestId('credit-note-apply-dialog');
+  await dialog.getByRole('radio', { name: 'Select installment 1' }).check();
+  await dialog.getByTestId('confirm-apply-credit-note').click();
+
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('alert')).toContainText(
+    'Installment 1 was credited by another user while this note was open.'
+  );
+  await expect(dialog.getByTestId('confirm-apply-credit-note')).toBeEnabled();
+  const row = page.getByTestId(`credit-note-row-${NOTE_ID}`);
+  await expect(row).toContainText('ISSUED');
+  await expect(row.getByTestId(`applied-installment-${NOTE_ID}`)).toHaveCount(0);
+  expect(state.creditNotePatches).toHaveLength(1);
+  expect(state.creditNotePatches[0].body).toEqual({
+    status: 'APPLIED',
+    installmentId: 'installment-1'
+  });
+  expect(state.creditNoteGets).toBe(2);
+  expect(state.billingGets).toBe(2);
+});
+
+test('contains a 400 apply rejection in the modal without changing the note', async ({ page }) => {
+  const state = await installMocks(page, {
+    installments: applyInstallments(),
+    notes: [issuedNote()],
+    patchStatus: 400,
+    patchError: problem(
+      400,
+      'The selected installment no longer has enough outstanding for this credit note.',
+      'CREDIT_NOTE_INVALID_INSTALLMENT'
+    )
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId(`apply-credit-note-${NOTE_ID}`).click();
+  const dialog = page.getByTestId('credit-note-apply-dialog');
+  await dialog.getByRole('radio', { name: 'Select installment 1' }).check();
+  await dialog.getByTestId('confirm-apply-credit-note').click();
+
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId('credit-note-apply-error')).toContainText(
+    'The selected installment no longer has enough outstanding for this credit note.'
+  );
+  await expect(dialog.getByRole('radio', { name: 'Select installment 1' })).toBeChecked();
+  const row = page.getByTestId(`credit-note-row-${NOTE_ID}`);
+  await expect(row).toContainText('ISSUED');
+  await expect(row).toContainText('2026-10-01');
+  expect(state.creditNotePatches).toHaveLength(1);
+  expect(state.billingGets).toBe(2);
 });
 
 test('cancels a draft and an issued note only after confirmation', async ({ page }) => {

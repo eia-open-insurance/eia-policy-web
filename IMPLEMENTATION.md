@@ -78,7 +78,11 @@ rendered.
 
 Billing owns the premium collection plan only. `GET /billing` is treated as an
 empty state on 404; a plan is rendered as a summary (total premium, paid,
-outstanding, overdue) and an installment table. `POST /billing` sends
+credited, outstanding net of credits, overdue) and an installment table.
+`creditedAmount` and `outstandingAmount` are read from the Billing payload when
+present (`outstandingAmount` falls back to `amount - creditedAmount`) and the
+installment table adds Credited and Outstanding columns only when at least one
+row carries those fields. `POST /billing` sends
 `{installmentCount, frequency, firstDueDate}` with an `Idempotency-Key`;
 `PATCH /billing/installments/{id}` sends `{status}` (plus an existing
 `paymentId` when present). `DUE`/`OVERDUE` rows also offer `Link payment`, which
@@ -100,17 +104,22 @@ Credit notes sit at the bottom of the Billing tab, after the installments. The
 section reads `GET /api/v1/policies/{policyId}/credit-notes` alongside the
 billing plan and renders an issued total (ISSUED + APPLIED notes) and an applied
 total (APPLIED notes), plus a table of note number, amount/currency, reason,
-status, issued date, applied date, and actions. An empty ledger is the section's
+status, issued date, applied date, and the applied installment number/ID when
+the read carries one. An empty ledger is the section's
 empty state, not an unavailable tab. `New credit note` opens a modal whose amount
 defaults to the unpaid premium and whose currency is fixed to the policy premium
 currency; `Save draft` posts `{amount, currency, reason}` to
 `POST /api/v1/policies/{policyId}/credit-notes` with an `Idempotency-Key`.
-`Issue` (DRAFT), `Apply` (ISSUED), and `Cancel` (DRAFT/ISSUED, after an inline
-confirmation) PATCH `{status}` to
-`/api/v1/policies/{policyId}/credit-notes/{creditNoteId}/status`; a 409 re-reads
-the ledger before the operator retries. Credit notes reduce premium owed; they do
-not change the policy premium, coverage, limits, or version, and applying a note
-is an accounting status, not a Payment.
+`Issue` (DRAFT) and `Cancel` (DRAFT/ISSUED, after an inline confirmation) PATCH
+`{status}` to
+`/api/v1/policies/{policyId}/credit-notes/{creditNoteId}/status`. `Apply`
+(ISSUED) opens a picker of DUE/OVERDUE installments whose outstanding is at
+least the note amount; `Apply credit note` sends `{status: "APPLIED",
+installmentId}` to the same status endpoint. A 400 or 409 is contained in the
+modal with the canonical problem and re-reads the ledger and billing plan so a
+stale target is not offered again. Credit notes reduce premium owed; they do not
+change the policy premium, coverage, limits, or version, and applying a note is
+an accounting status, not a Payment.
 
 ## Structure
 
@@ -132,10 +141,14 @@ is an accounting status, not a Payment.
 form validation, tolerant normalization of the billing read (plan, installments,
 summary), status/action rules, the Payment hand-off URL, the policy-payment
 source query, tolerant payment normalization, payment status tone, amount
-comparison for reconciliation, and the link payload. `src/creditNotes.js` holds
+comparison for reconciliation, the link payload, and the credited/outstanding
+normalization that decides when the credit columns apply.
+`src/creditNotes.js` holds
 the credit-note reason catalog, form defaults and validation, the create and
-status payloads, status/action rules, and tolerant normalization of the ledger
-read and its summary. `src/renewal.js`
+status (including apply installment) payloads, status/action rules, the eligible
+installment picker, the applied installment label, and tolerant normalization of
+the ledger read (including applied installment id/number) and its summary.
+`src/renewal.js`
 holds the pure renewal helpers: status eligibility and context, UTC-safe date
 arithmetic, the term/premium form defaults, payload construction, and
 validation. `src/massTort.js` holds the profile's tort, trigger, and allocation
@@ -177,12 +190,17 @@ plan payload, policy premium context, summary, mark paid/waive PATCH payloads,
 overdue rows, the Payment hand-off URL, read failures, 409 conflicts, the
 payment-picker query and tenant header, selection and apply payload, linked
 payment id/number, amount warning, empty state, picker read failure/retry, and a
-409 link conflict; `tests/credit-notes.spec.js` covers the empty ledger, the
-create modal's unpaid default and fixed policy currency, the draft POST payload
-and idempotency header, the derived issued/applied totals, issue and apply
-transitions, cancel confirmation for DRAFT and ISSUED notes, the section's
-contained read failure with retry, a create 409 that keeps the dialog open, and a
-status 409 that keeps the row unchanged and reloads the ledger; `tests/renewal.spec.js` covers action eligibility by status,
+409 link conflict; `tests/credit-notes.spec.js` covers the credited/net billing
+summary and conditional credited/outstanding installment columns, the empty
+ledger, the create modal's unpaid default and fixed policy currency, the draft
+POST payload and idempotency header, the derived issued/applied totals, issue
+and apply transitions, the apply picker's DUE/OVERDUE and outstanding filter
+(partial and exact-full applications, empty picker), the `{status, installmentId}`
+apply payload, the applied installment column, apply 400/409 containment with a
+ledger/billing re-read, cancel confirmation for DRAFT and ISSUED notes, the
+section's contained read failure with retry, a create 409 that keeps the dialog
+open, and a status 409 that keeps the row unchanged and reloads the ledger;
+`tests/renewal.spec.js` covers action eligibility by status,
 modal term and premium/limit defaults, the renewal payload and headers, success
 selection and notice, the predecessor link and its navigation, and the 409
 conflict; `tests/mass-tort.spec.js` covers the not-set empty state and setup

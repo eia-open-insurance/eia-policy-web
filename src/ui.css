@@ -1016,6 +1016,26 @@ a.eia-btn-secondary.eia-billing-payment-link {
 .eia-credit-note-confirm { font-size: 11px; font-weight: 600; color: var(--eia-red); }
 .eia-modal.eia-credit-note-modal { width: min(720px, 100%); }
 .eia-credit-note-modal .eia-context-panel { margin-top: 16px; }
+.eia-modal.eia-credit-note-apply-modal { width: min(780px, 100%); }
+.eia-credit-note-apply-empty { margin: 10px 0 0; padding: 18px; text-align: left; }
+.eia-credit-note-apply-empty p { margin: 0 0 6px; }
+.eia-credit-note-apply-empty p:last-child { margin-bottom: 0; }
+.eia-credit-note-installments { margin-top: 12px; }
+.eia-credit-note-installments input[type="radio"] {
+  width: 16px !important;
+  height: 16px !important;
+  margin: 0;
+  padding: 0 !important;
+  accent-color: var(--eia-blue);
+  cursor: pointer;
+}
+.eia-credit-note-installments tr.selected td { background: #eef5fb !important; }
+.eia-billing-credit-detail {
+  display: block;
+  margin-top: 2px;
+  color: var(--eia-muted);
+  font-size: 10px;
+}
 
 /* Billing: link an existing Payment to a DUE/OVERDUE installment */
 .eia-modal.eia-payment-link-modal { width: min(960px, 100%); }

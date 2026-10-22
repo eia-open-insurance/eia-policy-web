@@ -60,6 +60,36 @@ export function validateBillingForm(form) {
   return '';
 }
 
+/**
+ * The premium-variance adjustment adds one collection installment for the
+ * difference between the policy premium and the plan's net premium. The domain
+ * derives the amount from the policy and plan, so the command carries only the
+ * due date and the operator's audit reason.
+ */
+export function billingAdjustmentEndpoint(policyId) {
+  if (!policyId) return '';
+  return `/api/v1/policies/${encodeURIComponent(policyId)}/billing/adjustment`;
+}
+
+export function defaultBillingAdjustmentForm() {
+  return { dueDate: todayIso(), reason: '' };
+}
+
+export function billingAdjustmentPayload(form) {
+  return {
+    dueDate: form?.dueDate || '',
+    reason: String(form?.reason || '').trim()
+  };
+}
+
+export function validateBillingAdjustmentForm(form) {
+  if (!form?.dueDate) return 'Choose the due date for the adjustment installment.';
+  if (!String(form?.reason || '').trim()) {
+    return 'Enter a reason for the adjustment installment.';
+  }
+  return '';
+}
+
 function firstDefined(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== '');
 }
@@ -394,6 +424,20 @@ export function billingPremiumVariance(policy, plan) {
     hasCredits: creditedCents > 0,
     direction: deltaCents === 0 ? 'EQUAL' : deltaCents > 0 ? 'POLICY_HIGHER' : 'PLAN_HIGHER'
   };
+}
+
+/**
+ * The variance direction decides the corrective billing action. An
+ * under-scheduled plan (policy premium higher) collects the shortfall with one
+ * adjustment installment; an over-scheduled plan (plan net premium higher)
+ * gives back the excess through a credit note. An equal or unknown comparison
+ * has no action, so the warning never offers a meaningless command.
+ */
+export function billingVarianceAction(variance) {
+  if (!variance?.differs) return null;
+  if (variance.direction === 'POLICY_HIGHER') return 'ADD_ADJUSTMENT';
+  if (variance.direction === 'PLAN_HIGHER') return 'CREATE_CREDIT_NOTE';
+  return null;
 }
 
 /**

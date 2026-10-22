@@ -167,6 +167,21 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   the dialog. Playwright coverage for status eligibility, increase/decrease/
   no-change previews and payloads, the refreshed policy/version, and 400/409
   containment.
+- Billing premium-variance corrective actions. A policy premium above the plan's
+  net premium offers **Add adjustment installment**: the modal shows the delta
+  read-only, defaults the due date to today, requires a reason, and posts
+  `{dueDate, reason}` to
+  `POST /api/v1/policies/{policyId}/billing/adjustment` with an
+  `Idempotency-Key`, then reloads the plan and policy and announces the added
+  installment. A policy premium below the net plan offers **Create credit
+  note**, which opens the existing credit-note modal prefilled with the excess
+  and `Premium audit adjustment for <policyNumber>` for the operator to save,
+  issue, and apply. An equal or unknown variance offers no action. Rejections
+  stay in the modal with their canonical problem; a 409 reloads the plan and
+  policy (or the credit-note ledger) and states that the current variance was
+  reloaded. Playwright coverage for the adjustment payload and plan/policy
+  reload, contained 422 and 409 handling, the credit-note prefill and POST, and
+  the zero-variance no-action state.
 
 ### Changed
 

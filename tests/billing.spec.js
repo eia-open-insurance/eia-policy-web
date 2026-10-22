@@ -11,6 +11,8 @@ const PAYMENT_ID_3 = 'ffffffff-ffff-7fff-8fff-ffffffffffff';
 const PAYMENT_NUMBER = 'PAY-2026-0000001';
 const PAYMENT_NUMBER_2 = 'PAY-2026-0000002';
 const PAYMENT_NUMBER_3 = 'PAY-2026-0000003';
+const CREDIT_NOTE_ID = '99999999-9999-7999-8999-999999999998';
+const CREDIT_NOTE_NUMBER = 'CRN-2026-0000009';
 
 const POLICY = {
   id: POLICY_ID,
@@ -155,13 +157,22 @@ async function installMocks(page, options = {}) {
     plan: options.plan ? { ...options.plan } : null,
     installments: (options.installments || []).map((row) => ({ ...row })),
     payments: (options.payments || []).map((row) => ({ ...row })),
+    notes: [],
     planPosts: [],
     patches: [],
+    adjustmentPosts: [],
+    creditNotePosts: [],
     paymentGets: [],
     paymentDetailGets: [],
     billingGets: 0,
+    policyGets: 0,
+    creditNoteGets: 0,
     postStatus: options.postStatus || 201,
     postError: options.postError || null,
+    adjustmentStatus: options.adjustmentStatus || 201,
+    adjustmentError: options.adjustmentError || null,
+    creditNoteStatus: options.creditNoteStatus || 201,
+    creditNoteError: options.creditNoteError || null,
     patchStatus: options.patchStatus || 200,
     patchError: options.patchError || null,
     getStatus: options.getStatus || 200,
@@ -182,6 +193,7 @@ async function installMocks(page, options = {}) {
       return;
     }
     if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}`) {
+      state.policyGets += 1;
       await json(route, 200, policy, { ETag: '"4"' });
       return;
     }
@@ -250,6 +262,38 @@ async function installMocks(page, options = {}) {
       });
       return;
     }
+    if (method === 'POST' && url.pathname === `/api/v1/policies/${POLICY_ID}/billing/adjustment`) {
+      const body = request.postDataJSON();
+      state.adjustmentPosts.push({ headers: request.headers(), body });
+      if (state.adjustmentStatus >= 400) {
+        await json(route, state.adjustmentStatus, state.adjustmentError || problem(
+          state.adjustmentStatus,
+          'The billing plan changed while the adjustment was open.',
+          'BILLING_ADJUSTMENT_CONFLICT'
+        ));
+        return;
+      }
+      // The domain derives the added amount from the policy premium and the
+      // plan's net premium, so the mock mirrors that calculation.
+      const credited = Number(state.plan.creditedAmount || 0);
+      const netPlan = Math.max(Number(state.plan.totalPremiumAmount) - credited, 0);
+      const delta = Number(policy.premiumAmount) - netPlan;
+      const nextNumber = state.installments.length + 1;
+      state.plan = {
+        ...state.plan,
+        totalPremiumAmount: (Number(state.plan.totalPremiumAmount) + delta).toFixed(2)
+      };
+      state.installments.push(installment(nextNumber, {
+        id: `installment-${nextNumber}`,
+        dueDate: body.dueDate,
+        amount: delta.toFixed(2)
+      }));
+      await json(route, 201, billingBody(state.plan, state.installments), {
+        ETag: '"6"',
+        'Idempotent-Replayed': 'false'
+      });
+      return;
+    }
     if (method === 'PATCH' && url.pathname.startsWith(
       `/api/v1/policies/${POLICY_ID}/billing/installments/`
     )) {
@@ -282,7 +326,39 @@ async function installMocks(page, options = {}) {
       return;
     }
     if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}/credit-notes`) {
-      await json(route, 200, { items: [] });
+      state.creditNoteGets += 1;
+      await json(route, 200, { items: state.notes });
+      return;
+    }
+    if (method === 'POST' && url.pathname === `/api/v1/policies/${POLICY_ID}/credit-notes`) {
+      const body = request.postDataJSON();
+      state.creditNotePosts.push({ headers: request.headers(), body });
+      if (state.creditNoteStatus >= 400) {
+        await json(route, state.creditNoteStatus, state.creditNoteError || problem(
+          state.creditNoteStatus,
+          'A credit note with this amount and reason already exists.',
+          'CREDIT_NOTE_CONFLICT'
+        ));
+        return;
+      }
+      const created = {
+        id: CREDIT_NOTE_ID,
+        tenantId: TENANT,
+        policyId: POLICY_ID,
+        creditNoteNumber: CREDIT_NOTE_NUMBER,
+        amount: Number(body.amount).toFixed(2),
+        currency: body.currency,
+        reason: body.reason,
+        status: 'DRAFT',
+        issuedDate: null,
+        appliedDate: null,
+        createdAt: '2026-10-22T12:00:00Z'
+      };
+      state.notes.push(created);
+      await json(route, 201, created, {
+        ETag: '"1"',
+        'Idempotent-Replayed': 'false'
+      });
       return;
     }
     await route.fulfill({ status: 404, body: `unexpected route ${method} ${url.pathname}` });
@@ -928,8 +1004,9 @@ test('warns when the policy premium is above the net billing plan premium', asyn
     'Policy premium $120,000.00 differs from the billing plan net premium $100,000.00 by $20,000.00.'
   );
   await expect(warning).toContainText('does not automatically re-plan existing billing');
-  await expect(warning.getByTestId('billing-premium-variance-action'))
-    .toHaveText('Review premium audit');
+  await expect(warning.getByTestId('billing-variance-add-adjustment'))
+    .toHaveText('Add adjustment installment');
+  await expect(warning.getByTestId('billing-variance-create-credit-note')).toHaveCount(0);
 });
 
 test('warns when the policy premium is below the net billing plan premium', async ({ page }) => {
@@ -942,6 +1019,9 @@ test('warns when the policy premium is below the net billing plan premium', asyn
   await expect(page.getByTestId('billing-premium-variance-message')).toHaveText(
     'Policy premium $120,000.00 differs from the billing plan net premium $125,000.50 by $5,000.50.'
   );
+  await expect(page.getByTestId('billing-variance-create-credit-note'))
+    .toHaveText('Create credit note');
+  await expect(page.getByTestId('billing-variance-add-adjustment')).toHaveCount(0);
 });
 
 test('reduces the premium variance by the plan credits', async ({ page }) => {
@@ -990,6 +1070,8 @@ test('shows no variance warning when credits bring the net plan premium to the p
 
   await expect(page.getByTestId('billing-summary-credited')).toHaveText('$5,000.00');
   await expect(page.getByTestId('billing-premium-variance')).toHaveCount(0);
+  await expect(page.getByTestId('billing-variance-add-adjustment')).toHaveCount(0);
+  await expect(page.getByTestId('billing-variance-create-credit-note')).toHaveCount(0);
 });
 
 test('floors a fully credited plan net premium at zero', async ({ page }) => {
@@ -1057,19 +1139,189 @@ test('shows no variance warning when the policy premium is missing', async ({ pa
   await expect(page.getByTestId('billing-premium-variance')).toHaveCount(0);
 });
 
-test('opens the Endorsements premium audit from the variance warning', async ({ page }) => {
-  await installMocks(page, {
+test('adds a positive variance adjustment installment and reloads the plan and policy', async ({ page }) => {
+  const state = await installMocks(page, {
     plan: { ...PLAN, totalPremiumAmount: '100000.00' },
     installments: [installment(1)]
   });
   await openBillingTab(page);
 
-  await page.getByTestId('billing-premium-variance-action').click();
-
-  await expect(page.getByRole('tab', { name: 'Endorsements' }))
-    .toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByRole('tabpanel', { name: 'Endorsements' })).toBeVisible();
-  const dialog = page.getByTestId('premium-audit-dialog');
+  await page.getByTestId('billing-variance-add-adjustment').click();
+  const dialog = page.getByTestId('billing-adjustment-dialog');
+  const todayIso = new Date().toISOString().slice(0, 10);
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText(`Record premium audit for ${POLICY.policyNumber}`);
+  await expect(dialog.getByRole('heading', { name: 'Add adjustment installment' })).toBeVisible();
+  const delta = dialog.getByTestId('billing-adjustment-delta');
+  await expect(delta).toHaveValue('$20,000.00');
+  await expect(delta).toHaveAttribute('readonly', '');
+  await expect(dialog.getByLabel('Due date')).toHaveValue(todayIso);
+  await expect(dialog.getByTestId('billing-adjustment-reason')).toHaveValue('');
+  await expect(dialog.getByTestId('billing-adjustment-context-panel')).toContainText(
+    'The plan gains one collection installment'
+  );
+
+  await dialog.getByLabel('Reason').fill('   ');
+  await dialog.getByTestId('confirm-billing-adjustment').click();
+  await expect(dialog.getByTestId('billing-adjustment-error')).toContainText(
+    'Enter a reason for the adjustment installment.'
+  );
+  expect(state.adjustmentPosts).toHaveLength(0);
+
+  await dialog.getByLabel('Reason').fill('  Audit premium increase  ');
+  await dialog.getByTestId('confirm-billing-adjustment').click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText(
+    `Adjustment installment of $20,000.00 added, due ${todayIso}.`
+  );
+  await expect(page.getByTestId('billing-summary-total')).toHaveText('$120,000.00');
+  const newRow = page.getByTestId('installment-row-installment-2');
+  await expect(newRow).toContainText('$20,000.00');
+  await expect(newRow).toContainText(todayIso);
+  await expect(page.getByTestId('billing-premium-variance')).toHaveCount(0);
+
+  expect(state.adjustmentPosts).toHaveLength(1);
+  expect(state.adjustmentPosts[0].body).toEqual({
+    dueDate: todayIso,
+    reason: 'Audit premium increase'
+  });
+  expect(state.adjustmentPosts[0].headers['idempotency-key']).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  );
+  expect(state.adjustmentPosts[0].headers['x-eia-tenant']).toBe(TENANT);
+  expect(state.billingGets).toBe(2);
+  expect(state.policyGets).toBe(2);
+});
+
+test('contains an adjustment rejection inside the dialog without reloading the plan', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: { ...PLAN, totalPremiumAmount: '100000.00' },
+    installments: [installment(1)],
+    adjustmentStatus: 422,
+    adjustmentError: problem(
+      422,
+      'The due date must fall inside the policy term.',
+      'INVALID_BILLING_ADJUSTMENT'
+    )
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId('billing-variance-add-adjustment').click();
+  const dialog = page.getByTestId('billing-adjustment-dialog');
+  await dialog.getByLabel('Reason').fill('Premium audit increase');
+  await dialog.getByTestId('confirm-billing-adjustment').click();
+
+  await expect(dialog.getByTestId('billing-adjustment-error')).toContainText(
+    'The due date must fall inside the policy term.'
+  );
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('main > p[role="alert"]')).toHaveCount(0);
+  await expect(page.getByTestId('billing-summary-total')).toHaveText('$100,000.00');
+  expect(state.adjustmentPosts).toHaveLength(1);
+  expect(state.billingGets).toBe(1);
+  expect(state.policyGets).toBe(1);
+});
+
+test('reloads the plan and policy with guidance when the adjustment is 409', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: { ...PLAN, totalPremiumAmount: '100000.00' },
+    installments: [installment(1)],
+    adjustmentStatus: 409,
+    adjustmentError: problem(
+      409,
+      'The billing plan was already adjusted by another user.',
+      'BILLING_ADJUSTMENT_CONFLICT'
+    )
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId('billing-variance-add-adjustment').click();
+  const dialog = page.getByTestId('billing-adjustment-dialog');
+  await dialog.getByLabel('Reason').fill('Premium audit increase');
+  await dialog.getByTestId('confirm-billing-adjustment').click();
+
+  const error = dialog.getByTestId('billing-adjustment-error');
+  await expect(error).toContainText('The billing plan was already adjusted by another user.');
+  await expect(error).toContainText('The billing plan and policy were reloaded');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('Reason')).toHaveValue('Premium audit increase');
+  await expect(page.locator('main > p[role="alert"]')).toHaveCount(0);
+  await expect(page.getByTestId('billing-summary-total')).toHaveText('$100,000.00');
+  expect(state.adjustmentPosts).toHaveLength(1);
+  await expect.poll(() => state.billingGets).toBe(2);
+  await expect.poll(() => state.policyGets).toBe(2);
+});
+
+test('prefills a negative variance credit note with the excess and audit reason', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: { ...PLAN, totalPremiumAmount: '125000.50' },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId('billing-variance-create-credit-note').click();
+  const dialog = page.getByTestId('credit-note-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('Amount')).toHaveValue('5000.50');
+  await expect(dialog.getByLabel('Currency')).toHaveValue('USD');
+  await expect(dialog.getByLabel('Reason')).toHaveValue(
+    `Premium audit adjustment for ${POLICY.policyNumber}`
+  );
+  await expect(dialog.getByTestId('credit-note-variance-context')).toContainText('$5,000.50');
+  await expect(dialog.getByTestId('credit-note-dialog-context')).toContainText(
+    'settles a negative premium variance'
+  );
+
+  await dialog.getByRole('button', { name: 'Save draft' }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText(`${CREDIT_NOTE_NUMBER} saved as draft.`);
+  const row = page.getByTestId(`credit-note-row-${CREDIT_NOTE_ID}`);
+  await expect(row).toContainText(`Premium audit adjustment for ${POLICY.policyNumber}`);
+  await expect(row.getByTestId(`issue-credit-note-${CREDIT_NOTE_ID}`)).toBeVisible();
+  expect(state.creditNotePosts).toHaveLength(1);
+  expect(state.creditNotePosts[0].body).toEqual({
+    amount: 5000.5,
+    currency: 'USD',
+    reason: `Premium audit adjustment for ${POLICY.policyNumber}`
+  });
+});
+
+test('contains a variance credit note 409 and reloads the ledger with guidance', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: { ...PLAN, totalPremiumAmount: '125000.50' },
+    installments: [installment(1)],
+    creditNoteStatus: 409,
+    creditNoteError: problem(
+      409,
+      'A credit note for this variance already exists.',
+      'CREDIT_NOTE_CONFLICT'
+    )
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId('billing-variance-create-credit-note').click();
+  const dialog = page.getByTestId('credit-note-dialog');
+  await dialog.getByRole('button', { name: 'Save draft' }).click();
+
+  const error = dialog.getByTestId('credit-note-form-error');
+  await expect(error).toContainText('A credit note for this variance already exists.');
+  await expect(error).toContainText('ledger was reloaded');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('Amount')).toHaveValue('5000.50');
+  expect(state.creditNotePosts).toHaveLength(1);
+  expect(state.billingGets).toBe(1);
+  await expect.poll(() => state.creditNoteGets).toBe(2);
+});
+
+test('offers no variance action when the policy premium equals the net plan premium', async ({ page }) => {
+  await installMocks(page, {
+    plan: { ...PLAN, totalPremiumAmount: '120000.00' },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-premium-variance')).toHaveCount(0);
+  await expect(page.getByTestId('billing-variance-add-adjustment')).toHaveCount(0);
+  await expect(page.getByTestId('billing-variance-create-credit-note')).toHaveCount(0);
 });

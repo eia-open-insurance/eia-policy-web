@@ -1106,6 +1106,13 @@ a.eia-btn-secondary.eia-billing-payment-link {
 }
 .eia-modal.eia-credit-note-modal { width: min(720px, 100%); }
 .eia-credit-note-modal .eia-context-panel { margin-top: 16px; }
+.eia-modal.eia-billing-adjustment-modal { width: min(720px, 100%); }
+.eia-billing-adjustment-modal .eia-context-panel { margin-top: 16px; }
+.eia-billing-adjustment-modal #billing-adjustment-delta {
+  background: #f7fafc;
+  color: var(--eia-navy);
+  font-weight: 700;
+}
 .eia-modal.eia-credit-note-apply-modal { width: min(780px, 100%); }
 .eia-modal.eia-credit-note-reverse-modal { width: min(640px, 100%); }
 .eia-credit-note-reverse-warning {

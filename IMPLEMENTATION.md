@@ -133,15 +133,24 @@ are both present, the Billing tab compares them at cent precision. Net premium
 is the plan's scheduled total less credits applied, floored at zero so a fully
 or over-credited plan never compares against a negative amount. A difference
 shows `Policy premium $X differs from the billing plan net premium $Y by $Z.`
-with a note that a premium audit or endorsement changes written premium but
-does not automatically re-plan existing installments. When the plan carries
+with a note that a premium audit or endorsement changes written premium but does
+not automatically re-plan existing installments. When the plan carries
 credits, the warning appends `Plan total $T less credits $C.`; the plan's
 credited total is also carried through normalization from the summary or
-installment rows when the plan does not publish it. The `Review premium audit`
-action switches to Endorsements and opens the audit dialog when the policy
-status allows it (otherwise it lands on the tab, where the unavailable reason
-is shown). A missing plan, or a missing amount on either side, is not a
-variance and renders no warning.
+installment rows when the plan does not publish it. A policy premium above the
+net plan offers `Add adjustment installment`: the modal shows the delta
+read-only, a due date defaulted to today, and a required reason;
+`POST /billing/adjustment` sends `{dueDate, reason}` with a fresh
+`Idempotency-Key`, then re-reads the plan and the policy and announces the added
+installment. A policy premium below the net plan offers `Create credit note`,
+which opens the credit-note dialog prefilled with the excess and
+`Premium audit adjustment for <policyNumber>`; saving creates the normal draft
+and the operator issues and applies it in the ledger. A rejection stays in the
+modal with its canonical problem; a 409 also reloads the plan and policy (or
+reloads the ledger for the credit note) and tells the operator to review the
+refreshed variance. An equal or unknown variance offers no action. A missing
+plan, or a missing amount on either side, is not a variance and renders no
+warning.
 
 When an installment carries a `paymentId`, the Billing tab reads
 `GET /api/v1/payments/{id}` for each distinct linked payment and keeps that
@@ -224,14 +233,17 @@ reinstatement failure keeps the existing page-level problem handling.
    tab and the policy header/ETag after a successful mutation.
 
 `src/billing.js` holds the pure billing helpers: plan form defaults and payload,
-form validation, tolerant normalization of the billing read (plan, installments,
-summary), status/action rules, the Payment hand-off URL, the policy-payment
-source query, tolerant payment normalization, the linked-payment detail endpoint
-and status/review rules, the Payment record link, payment status tone, amount
-comparison for reconciliation, the link payload, and the credited/outstanding
-normalization that decides when the credit columns apply.
+form validation, the premium-variance adjustment endpoint/defaults/payload,
+the variance direction-to-action rule, tolerant normalization of the billing
+read (plan, installments, summary), status/action rules, the Payment hand-off
+URL, the policy-payment source query, tolerant payment normalization, the
+linked-payment detail endpoint and status/review rules, the Payment record
+link, payment status tone, amount comparison for reconciliation, the link
+payload, and the credited/outstanding normalization that decides when the
+credit columns apply.
 `src/creditNotes.js` holds
-the credit-note reason catalog, form defaults and validation, the create and
+the credit-note reason catalog, form defaults and validation (including the
+billing-variance prefill and its required free-text reason), the create and
 status (including apply installment and required reversal reason) payloads,
 status/action rules, the eligible installment picker, the applied installment
 label, and tolerant normalization of the ledger read (including applied
@@ -287,8 +299,12 @@ payment id/number, amount warning, empty state, picker read failure/retry, a
 non-PAID payment (including the summary count, Payment record link, and
 contained detail-read failure), the no-warning PAID case, the premium-vs-plan
 variance warning (policy higher and plan higher at cent precision), the
-equal and missing-amount no-warning cases, and the warning's Endorsements
-premium-audit action;
+equal and missing-amount no-warning cases, the positive-variance adjustment
+modal's read-only delta/today default/required reason and `{dueDate, reason}`
+POST with plan and policy reload, the contained 422 and 409 guidance/reload,
+the negative-variance credit-note prefill of the excess and
+`Premium audit adjustment for <policy>` reason, and the zero-variance
+no-action state;
 `tests/credit-notes.spec.js` covers the credited/net billing
 summary and conditional credited/outstanding installment columns, the empty
 ledger, the create modal's unpaid default and fixed policy currency, the draft

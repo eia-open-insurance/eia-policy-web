@@ -5,15 +5,19 @@ import LegalEntityPicker from './LegalEntityPicker.jsx';
 import ProgramPicker from './ProgramPicker.jsx';
 import {
   BILLING_FREQUENCIES,
+  billingAdjustmentEndpoint,
+  billingAdjustmentPayload,
   billingFrequencyLabel,
   billingHasCreditFields,
   billingPaymentHref,
   billingPlanPayload,
   billingPremiumVariance,
   billingStatusTone,
+  billingVarianceAction,
   canCreatePayment,
   canManageInstallment,
   countInstallmentsNeedingPaymentReview,
+  defaultBillingAdjustmentForm,
   defaultBillingForm,
   emptyBillingState,
   installmentPaymentPayload,
@@ -28,11 +32,13 @@ import {
   paymentStatusNeedsReview,
   paymentStatusTone,
   policyPaymentsEndpoint,
+  validateBillingAdjustmentForm,
   validateBillingForm
 } from './billing.js';
 import {
   CREDIT_NOTE_REASONS,
   CREDIT_NOTE_REVERSAL_REASON_MAX,
+  billingVarianceCreditNoteForm,
   canApplyCreditNote,
   canCancelCreditNote,
   canCreateCreditNoteForCancellation,
@@ -392,6 +398,7 @@ export default function App() {
   const creditNotesRequestRef = useRef(0);
   const [creditNoteOpen, setCreditNoteOpen] = useState(false);
   const [creditNoteCancellation, setCreditNoteCancellation] = useState(null);
+  const [creditNoteVariance, setCreditNoteVariance] = useState(null);
   const [creditNoteApply, setCreditNoteApply] = useState(null);
   const [creditNoteApplyError, setCreditNoteApplyError] = useState('');
   const [creditNoteReverse, setCreditNoteReverse] = useState(null);
@@ -455,6 +462,7 @@ export default function App() {
   const [billingForm, setBillingForm] = useState(() => defaultBillingForm(null));
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingInstallmentId, setBillingInstallmentId] = useState(null);
+  const [billingAdjustmentOpen, setBillingAdjustmentOpen] = useState(false);
   const [linkPaymentInstallment, setLinkPaymentInstallment] = useState(null);
   const [linkedPayments, setLinkedPayments] = useState({});
   const [paymentDetails, setPaymentDetails] = useState({});
@@ -887,6 +895,7 @@ export default function App() {
     paymentDetailsRequestRef.current += 1;
     setBilling(emptyBillingState());
     setPaymentDetails({});
+    setBillingAdjustmentOpen(false);
   }
 
   /**
@@ -974,6 +983,7 @@ export default function App() {
     setCreditNotes(emptyCreditNotesState());
     setCreditNoteOpen(false);
     setCreditNoteCancellation(null);
+    setCreditNoteVariance(null);
     setCreditNoteApply(null);
     setCreditNoteApplyError('');
     setCreditNoteReverse(null);
@@ -1875,13 +1885,41 @@ export default function App() {
   }
 
   /**
-   * The variance warning is advisory. The action switches to Endorsements,
-   * where a premium audit can be recorded when the policy status allows it;
-   * the billing installments are never rewritten from the warning.
+   * A positive variance means the plan schedules less than the policy premium.
+   * The corrective action adds one collection installment for the difference;
+   * the domain derives the amount, so the tab never posts a premium.
    */
-  function reviewPremiumVariance() {
-    selectTab('endorsements');
-    openPremiumAudit();
+  function openBillingAdjustment() {
+    if (!selected || billingVarianceAction(billingVariance) !== 'ADD_ADJUSTMENT') return;
+    setError('');
+    setNotice('');
+    setBillingAdjustmentOpen(true);
+  }
+
+  function closeBillingAdjustment() {
+    setBillingAdjustmentOpen(false);
+  }
+
+  /**
+   * Reload the plan and the policy after an adjustment. The command response is
+   * not the authoritative schedule, and a concurrent change may have advanced
+   * the policy, so both reads are repeated before the new installment is shown.
+   */
+  async function reloadBillingVariance() {
+    if (!selected) return;
+    await Promise.all([
+      loadBilling(selected.id, selected.policy),
+      refreshSelected().catch(() => null)
+    ]).catch(() => {});
+  }
+
+  async function billingAdjustmentCreated({ dueDate, amount }) {
+    setBillingAdjustmentOpen(false);
+    setNotice(
+      `Adjustment installment of ${formatMoney(amount, billingVarianceCurrency)} added, `
+      + `due ${dueDate}.`
+    );
+    await reloadBillingVariance();
   }
 
   async function updateInstallment(installment, status) {
@@ -1957,6 +1995,22 @@ export default function App() {
   function openCreditNoteForm() {
     setCreditNoteActionError('');
     setCreditNoteCancellation(null);
+    setCreditNoteVariance(null);
+    setCreditNoteOpen(true);
+  }
+
+  /**
+   * A negative variance means the plan schedules more than the policy premium.
+   * The excess is given back through the normal credit-note dialog, prefilled
+   * with the variance amount and the audit reason; issuing and applying remain
+   * the operator's separate, audited steps in the ledger.
+   */
+  function openBillingVarianceCreditNote() {
+    if (!selected || billingVarianceAction(billingVariance) !== 'CREATE_CREDIT_NOTE') return;
+    setCreditNoteActionError('');
+    setNotice('');
+    setCreditNoteCancellation(null);
+    setCreditNoteVariance(billingVariance);
     setCreditNoteOpen(true);
   }
 
@@ -1975,12 +2029,14 @@ export default function App() {
     setCreditNoteActionError('');
     setNotice('');
     setCreditNoteCancellation(cancellation);
+    setCreditNoteVariance(null);
     setCreditNoteOpen(true);
   }
 
   function closeCreditNoteForm() {
     setCreditNoteOpen(false);
     setCreditNoteCancellation(null);
+    setCreditNoteVariance(null);
   }
 
   /** The cancellation row's "Credit note created" link opens the ledger. */
@@ -1993,6 +2049,7 @@ export default function App() {
     const created = resultBody?.creditNote || resultBody;
     setCreditNoteOpen(false);
     setCreditNoteCancellation(null);
+    setCreditNoteVariance(null);
     setCreditNoteActionError('');
     setNotice(`${creditNoteLabel(created)} saved as draft.`);
     if (selected?.id) {
@@ -2803,6 +2860,12 @@ export default function App() {
         : ''
     ].filter(Boolean).join(' ')
     : '';
+  const billingVarianceActionValue = billingVarianceAction(billingVariance);
+  const billingVarianceHint = billingVarianceActionValue === 'ADD_ADJUSTMENT'
+    ? 'The plan schedules less than the policy premium. Add one installment for the difference.'
+    : billingVarianceActionValue === 'CREATE_CREDIT_NOTE'
+      ? 'The plan schedules more than the policy premium. Credit the excess on the ledger.'
+      : '';
 
   return (
     <main>
@@ -5120,21 +5183,29 @@ export default function App() {
                             it is deliberately adjusted.
                           </p>
                           <div className="eia-billing-premium-variance-actions">
-                            <button
-                              type="button"
-                              className="eia-btn-secondary"
-                              data-testid="billing-premium-variance-action"
-                              onClick={reviewPremiumVariance}
-                              title={premiumAuditAllowed
-                                ? 'Open Endorsements and record a premium audit'
-                                : premiumAuditHint}
-                            >
-                              {premiumAuditAllowed ? 'Review premium audit' : 'Open Endorsements'}
-                            </button>
-                            <span className="eia-muted">
-                              Billing plan adjustments follow the premium change; installments
-                              are not recalculated automatically.
-                            </span>
+                            {billingVarianceActionValue === 'ADD_ADJUSTMENT' && (
+                              <button
+                                type="button"
+                                className="eia-btn-secondary"
+                                data-testid="billing-variance-add-adjustment"
+                                onClick={openBillingAdjustment}
+                                title="Add one billing installment for the premium difference"
+                              >
+                                Add adjustment installment
+                              </button>
+                            )}
+                            {billingVarianceActionValue === 'CREATE_CREDIT_NOTE' && (
+                              <button
+                                type="button"
+                                className="eia-btn-secondary"
+                                data-testid="billing-variance-create-credit-note"
+                                onClick={openBillingVarianceCreditNote}
+                                title="Create a credit note for the excess scheduled premium"
+                              >
+                                Create credit note
+                              </button>
+                            )}
+                            <span className="eia-muted">{billingVarianceHint}</span>
                           </div>
                         </section>
                       )}
@@ -6317,11 +6388,22 @@ export default function App() {
           onLinked={(payment) => paymentLinked(linkPaymentInstallment, payment)}
         />
       )}
+      {billingAdjustmentOpen && selectedPolicy && (
+        <BillingAdjustmentDialog
+          policy={selectedPolicy}
+          variance={billingVariance}
+          currency={billingVarianceCurrency}
+          onClose={closeBillingAdjustment}
+          onCreated={billingAdjustmentCreated}
+          onConflict={reloadBillingVariance}
+        />
+      )}
       {creditNoteOpen && selectedPolicy && (
         <CreditNoteDialog
           policy={selectedPolicy}
           unpaidAmount={billing.summary?.outstandingAmount}
           cancellation={creditNoteCancellation}
+          billingVariance={creditNoteVariance}
           onClose={closeCreditNoteForm}
           onCreated={creditNoteCreated}
           onConflict={refreshCreditNotesAfterConflict}
@@ -6778,12 +6860,15 @@ function CreditNotesSection({
  * A credit note is saved as a draft. From Billing the amount defaults to the
  * unpaid premium and stays editable. From a posted cancellation the amount is
  * the computed return premium and is locked to that cancellation, and the
- * source cancellation number is written into the reason.
+ * source cancellation number is written into the reason. From a negative
+ * premium variance the amount is the excess scheduled premium and the reason
+ * names the policy whose audit adjustment the note settles.
  */
 function CreditNoteDialog({
   policy,
   unpaidAmount,
   cancellation,
+  billingVariance,
   onClose,
   onCreated,
   onConflict
@@ -6791,11 +6876,16 @@ function CreditNoteDialog({
   const [form, setForm] = useState(() => (
     cancellation
       ? cancellationCreditNoteForm(policy, cancellation)
-      : defaultCreditNoteForm(policy, unpaidAmount)
+      : billingVariance
+        ? billingVarianceCreditNoteForm(policy, billingVariance)
+        : defaultCreditNoteForm(policy, unpaidAmount)
   ));
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
   const locked = Boolean(cancellation);
+  const varianceAmount = billingVariance?.differenceCents !== undefined
+    ? billingVariance.differenceCents / 100
+    : null;
   const sourceNumber = cancellationNumber(cancellation);
   const currency = policy?.premiumCurrency || form.currency || '';
 
@@ -6829,10 +6919,16 @@ function CreditNoteDialog({
         idempotencyKey: newIdempotencyKey()
       });
       if (!result.response.ok) {
-        setFormError(problemMessage(
+        const message = problemMessage(
           result.body,
           `Credit note creation failed: ${result.response.status}`
-        ));
+        );
+        setFormError(
+          billingVariance && result.response.status === 409
+            ? `${message} The credit note ledger was reloaded; review the existing notes and `
+              + 'try again.'
+            : message
+        );
         // A 409 means another operator already created the cancellation's note;
         // re-read the ledger so the source row can link to the existing note.
         if (result.response.status === 409 && onConflict) {
@@ -6866,22 +6962,38 @@ function CreditNoteDialog({
           {locked
             ? `Save a return-premium draft credit note against ${policy.policyNumber} for `
               + `posted cancellation ${sourceNumber}.`
-            : `Save a draft credit note against ${policy.policyNumber}.`}
+            : billingVariance
+              ? `Save a draft credit note against ${policy.policyNumber} for the premium `
+                + 'variance.'
+              : `Save a draft credit note against ${policy.policyNumber}.`}
           {' '}Issuing and applying are separate, audited status changes; no money moves and the
           policy premium is not edited.
         </p>
         <p
           className="eia-muted eia-modal-currency-context"
-          data-testid="credit-note-default-context"
+          data-testid={billingVariance ? 'credit-note-variance-context' : 'credit-note-default-context'}
         >
           Policy premium {formatMoney(policy.premiumAmount, policy.premiumCurrency)}
-          {' · '}{locked ? 'return premium' : 'unpaid'}{' '}
+          {' · '}{locked
+            ? 'return premium'
+            : billingVariance
+              ? 'plan net premium'
+              : 'unpaid'}{' '}
           <b>
             {formatMoney(
-              locked ? cancellation.returnPremiumAmount : unpaidAmount,
+              locked
+                ? cancellation.returnPremiumAmount
+                : billingVariance
+                  ? billingVariance.netPlanCents / 100
+                  : unpaidAmount,
               currency
             )}
           </b>
+          {billingVariance ? (
+            <>
+              {' · '}variance <b>{formatMoney(varianceAmount, currency)}</b>
+            </>
+          ) : null}
         </p>
         {locked && (
           <p
@@ -6920,8 +7032,11 @@ function CreditNoteDialog({
               {locked
                 ? 'Fixed to the posted cancellation return premium. The note reduces premium '
                   + 'owed; it does not change the policy premium.'
-                : 'Defaults to the unpaid premium. The note reduces premium owed; it does not '
-                  + 'change the policy premium.'}
+                : billingVariance
+                  ? 'Prefilled to the excess scheduled premium. The note reduces premium owed; '
+                    + 'it does not change the policy premium.'
+                  : 'Defaults to the unpaid premium. The note reduces premium owed; it does not '
+                    + 'change the policy premium.'}
             </span>
           </div>
           <div className="eia-field">
@@ -6961,6 +7076,14 @@ function CreditNoteDialog({
                 readOnly
                 aria-readonly="true"
               />
+            ) : billingVariance ? (
+              <input
+                id="credit-note-reason"
+                data-testid="credit-note-reason"
+                value={form.reasonText}
+                onChange={(e) => update('reasonText', e.target.value)}
+                required
+              />
             ) : (
               <select
                 id="credit-note-reason"
@@ -6976,7 +7099,9 @@ function CreditNoteDialog({
             <span className="eia-field-hint">
               {locked
                 ? 'Derived from the posted cancellation and sent with the note.'
-                : 'Optional accounting reason for the note.'}
+                : billingVariance
+                  ? 'Prefilled for the premium audit adjustment and sent with the note.'
+                  : 'Optional accounting reason for the note.'}
             </span>
           </div>
           <div className="eia-field span-3 eia-modal-actions">
@@ -7007,6 +7132,13 @@ function CreditNoteDialog({
               cancellation cannot create a second note.
             </p>
           )}
+          {billingVariance && (
+            <p>
+              <b>This note settles a negative premium variance.</b> The amount is the plan&apos;s
+              net premium above the policy premium. Issue it and then apply it to an open
+              installment; the policy premium itself is unchanged.
+            </p>
+          )}
           <p>
             <b>The note starts in DRAFT.</b> It does not affect premium owed until it is issued,
             and it does not change the policy premium, coverage, limits, or version.
@@ -7014,6 +7146,196 @@ function CreditNoteDialog({
           <p>
             <b>Issuing and applying are accounting status changes.</b> Applying is not a Payment;
             it records the credit against the receivable and does not move money.
+          </p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A positive premium variance is collected with one adjustment installment.
+ * The amount is the difference between the policy premium and the plan's net
+ * premium, and the domain derives it from those records: the command sends only
+ * the due date and the operator's reason. The modal stays contained on a
+ * rejection and reloads the plan/policy on a 409 before the operator retries.
+ */
+function BillingAdjustmentDialog({
+  policy,
+  variance,
+  currency,
+  onClose,
+  onCreated,
+  onConflict
+}) {
+  const [form, setForm] = useState(defaultBillingAdjustmentForm);
+  const [formError, setFormError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const amount = variance?.differenceCents !== undefined
+    ? variance.differenceCents / 100
+    : null;
+  const netPlanAmount = variance?.netPlanCents !== undefined
+    ? variance.netPlanCents / 100
+    : null;
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !saving) onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [saving, onClose]);
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setFormError('');
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    if (saving || !policy?.id) return;
+    const validation = validateBillingAdjustmentForm(form);
+    if (validation) {
+      setFormError(validation);
+      return;
+    }
+    setFormError('');
+    setSaving(true);
+    try {
+      const payload = billingAdjustmentPayload(form);
+      const result = await api(billingAdjustmentEndpoint(policy.id), {
+        method: 'POST',
+        body: payload,
+        idempotencyKey: newIdempotencyKey()
+      });
+      if (!result.response.ok) {
+        const message = problemMessage(
+          result.body,
+          `Adjustment installment failed: ${result.response.status}`
+        );
+        // A conflict means the plan or policy moved while the dialog was open.
+        // Re-read both, keep the operator's values, and say the schedule was
+        // reloaded so the next attempt uses the current variance.
+        if (result.response.status === 409) {
+          setFormError(
+            `${message} The billing plan and policy were reloaded; review the current `
+            + 'variance and try again.'
+          );
+          if (onConflict) await onConflict();
+        } else {
+          setFormError(message);
+        }
+        return;
+      }
+      onCreated({ dueDate: payload.dueDate, amount });
+    } catch (e) {
+      setFormError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="eia-modal-backdrop">
+      <div
+        className="eia-modal eia-billing-adjustment-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="billing-adjustment-title"
+        aria-describedby="billing-adjustment-description"
+        data-testid="billing-adjustment-dialog"
+      >
+        <div className="eia-section-title" style={{ marginTop: 0 }}>
+          <h2 id="billing-adjustment-title">Add adjustment installment</h2>
+          <span className="eia-badge">{policy.policyNumber}</span>
+        </div>
+        <p className="eia-modal-lede" id="billing-adjustment-description">
+          The billing plan schedules less than the policy premium. Adding one installment
+          schedules the difference for collection; it does not change the policy premium,
+          coverage, limits, or version.
+        </p>
+        <p className="eia-muted eia-modal-currency-context">
+          Policy premium {formatMoney(policy.premiumAmount, policy.premiumCurrency)}
+          {' · '}plan net premium{' '}
+          <b>{formatMoney(netPlanAmount, currency)}</b>
+        </p>
+
+        {formError && (
+          <p role="alert" className="eia-modal-error" data-testid="billing-adjustment-error">
+            {formError}
+          </p>
+        )}
+
+        <form className="eia-form-grid" onSubmit={submit}>
+          <div className="eia-field">
+            <label htmlFor="billing-adjustment-delta">Adjustment amount</label>
+            <input
+              id="billing-adjustment-delta"
+              data-testid="billing-adjustment-delta"
+              value={formatMoney(amount, currency)}
+              readOnly
+              aria-readonly="true"
+            />
+            <span className="eia-field-hint">
+              The uncollected variance; the domain derives it from the policy and plan.
+            </span>
+          </div>
+          <div className="eia-field">
+            <label htmlFor="billing-adjustment-due-date">Due date</label>
+            <input
+              id="billing-adjustment-due-date"
+              data-testid="billing-adjustment-due-date"
+              type="date"
+              value={form.dueDate}
+              onChange={(e) => update('dueDate', e.target.value)}
+              required
+            />
+            <span className="eia-field-hint">Defaults to today.</span>
+          </div>
+          <div className="eia-field span-3">
+            <label htmlFor="billing-adjustment-reason">Reason</label>
+            <input
+              id="billing-adjustment-reason"
+              data-testid="billing-adjustment-reason"
+              placeholder="Premium audit increase, endorsement, or billing note"
+              value={form.reason}
+              onChange={(e) => update('reason', e.target.value)}
+              required
+            />
+            <span className="eia-field-hint">
+              Required audit reason stored with the adjustment installment.
+            </span>
+          </div>
+          <div className="eia-field span-3 eia-modal-actions">
+            <button type="submit" data-testid="confirm-billing-adjustment" disabled={saving}>
+              {saving ? 'Adding installment…' : 'Add adjustment installment'}
+            </button>
+            <button
+              type="button"
+              className="eia-btn-secondary"
+              onClick={onClose}
+              disabled={saving}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+
+        <section
+          className="eia-context-panel"
+          aria-label="Adjustment installment context"
+          data-testid="billing-adjustment-context-panel"
+        >
+          <h4>What the adjustment changes</h4>
+          <p>
+            <b>The plan gains one collection installment.</b> The added amount is the gap between
+            the policy premium and the plan&apos;s net premium, so the schedule catches up with
+            the written premium after an audit or endorsement.
+          </p>
+          <p>
+            <b>The policy and its version are unchanged.</b> The adjustment is a billing-schedule
+            change only; coverage, limits, the written premium, and the policy version stay as
+            they are.
           </p>
         </section>
       </div>

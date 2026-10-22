@@ -107,6 +107,25 @@ export function defaultCreditNoteForm(policy, unpaidAmount) {
 }
 
 /**
+ * A negative premium variance is given back with a credit note for the excess
+ * (the plan's net premium is above the policy premium). The amount is preset to
+ * the positive difference and the reason records the policy whose premium the
+ * audit changed; both stay editable because the operator still owns the note.
+ */
+export function billingVarianceCreditNoteForm(policy, variance) {
+  const difference = numeric(variance?.differenceCents);
+  const amount = difference !== null && difference > 0 ? difference / 100 : null;
+  const policyLabel = policy?.policyNumber || policy?.id || 'this policy';
+  return {
+    amount: amount === null ? '' : amount.toFixed(2),
+    currency: policy?.premiumCurrency || '',
+    reason: 'CORRECTION',
+    reasonText: `Premium audit adjustment for ${policyLabel}`,
+    requireReason: true
+  };
+}
+
+/**
  * The label a cancellation is known by. The Policy expert currently returns the
  * cancellation `id`; a `cancellationNumber` (or its catalog aliases) is used when
  * the projection widens. This label is also printed in the credit-note reason so
@@ -185,6 +204,9 @@ export function validateCreditNoteForm(form) {
   if (amount === null || amount <= 0) {
     return 'Credit note amount must be greater than 0.';
   }
+  if (form?.requireReason && !String(form?.reasonText || '').trim()) {
+    return 'Enter a reason for the credit note.';
+  }
   if (!CREDIT_NOTE_REASONS.some((entry) => entry.value === String(form?.reason || ''))) {
     return 'Select a credit note reason.';
   }
@@ -195,17 +217,19 @@ export function validateCreditNoteForm(form) {
  * The currency is derived from the policy; an amount is sent as a JSON number.
  * A cancellation-derived note sends the source `cancellationId` and its
  * human-readable reason sentence, which lets the Policy expert tie the note to
- * the cancellation and reject a duplicate with 409.
+ * the cancellation and reject a duplicate with 409. A premium-variance note
+ * sends the audit sentence as free text for the same traceability.
  */
 export function creditNotePayload(form, policy) {
   const amount = numeric(form?.amount);
   const cancellationId = firstText(form?.cancellationId);
+  const freeTextReason = firstText(form?.reasonText);
   const payload = {
     amount: amount === null ? form?.amount : Number(amount.toFixed(2)),
     currency: String(policy?.premiumCurrency || form?.currency || '').toUpperCase(),
     reason: cancellationId
       ? String(form?.reasonText || '').trim()
-      : String(form?.reason || '').toUpperCase()
+      : freeTextReason || String(form?.reason || '').toUpperCase()
   };
   if (cancellationId) payload.cancellationId = cancellationId;
   return payload;

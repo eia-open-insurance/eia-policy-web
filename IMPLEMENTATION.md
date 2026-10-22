@@ -97,6 +97,41 @@ queue and announces the move. A 400/409 stays in the dialog; a 409 re-reads the
 current submission. Detail **Refresh** re-reads both the submission and the
 queue, and a list read failure is contained with Retry.
 
+The **Referral** panel is separate from the status actions. It renders the
+submission detail's current referral: its `PENDING`/`APPROVED`/`DECLINED`
+status, reason, authority, referred-to person, notes, deciding person, and the
+referral timestamp. The detail projection may embed a `referral` object or
+flatten `referralStatus`/`referralReason`/`referralAuthority`/`referredTo`/
+`referralNotes`/`referralDecidedBy`; both are normalized. While the submission
+is `RECEIVED` or `REFERRED` and the current referral is absent or `DECLINED`,
+`Refer` opens a dialog with the closed reason vocabulary (`LIMIT`, `PREMIUM`,
+`TORT`, `APPETITE`, `MANUSCRIPT`, `SANCTIONS`, `CONFLICT`, `OTHER`), a free-text
+authority, a directory person picker for `referredTo`, and optional notes.
+Submitting posts `{reason, authority, referredTo, notes?}` to
+`POST /api/v1/policies/submissions/{submissionId}/referral` with an
+`Idempotency-Key`; a blank notes member is omitted. The success notice and the
+refreshed submission show the referral `PENDING`, the submission `REFERRED`,
+and the queue row updated. A `PENDING` referral renders `Approve referral` and
+`Decline referral`; each opens a dialog with a directory `decidedBy` picker and
+optional notes and posts `{decision, decidedBy, notes?}` to
+`POST /api/v1/policies/submissions/{submissionId}/referral/decision` with
+`decision` `APPROVED` or `DECLINED`. The decision resolves the referral only:
+the submission keeps its status, and a declined referral leaves it open for a
+new referral or a separate status action. Both commands refresh the submission
+detail and the queue and announce the outcome. Client validation requires the
+reason, authority, and referred-to person (and the deciding person for a
+decision). A 400/409 stays in the dialog; a 409 re-reads the submission and
+queue so the panel reflects the referral the domain actually holds. A pending
+referral never offers `Refer` again, and an approved referral is not reopened.
+
+The directory is platform master data read from `GET /api/v1/directory`
+without the `X-EIA-Tenant` header, cached in memory for the tab. It loads when
+a referral picker opens or when the selected referral carries person ids, and
+a directory failure is contained: the panel falls back to the short person id
+and the dialog offers a Retry action; it never blocks the submission record.
+`src/DirectoryPersonPicker.jsx` is the searchable, keyboard-driven picker
+shared by both referral dialogs.
+
 The conversion panel is separate from the status actions. It offers
 `Convert to policy` for `QUOTED` and `BOUND` submissions; earlier statuses
 explain that a quote or bind is required, and `DECLINED`/`WITHDRAWN` are closed.
@@ -118,7 +153,8 @@ The context panels state that submissions precede policies, that a submission is
 the new-business opportunity and not a policy, and that quoting or binding a
 submission does not create a policy yet. Only the explicit conversion creates
 the DRAFT policy record and binds the submission; status actions update only the
-submission.
+submission. The referral workflow is separate again: approving or declining a
+referral never changes the submission status, its terms, or a policy.
 
 The Overview also carries a read-only related-notifications card. It reads
 `GET /api/v1/notifications?sourceType=POLICY&sourceId=<policyId>` and shows the
@@ -506,6 +542,13 @@ details, detaching with `legalEntityId: null`, creating an entity with all
 catalog fields and attaching it, create validation and a catalog rejection
 inside the open dialog, a 404 for the assigned entity, a contained entity read
 failure with retry, and a 409 attach conflict that reloads and retries.
+`tests/referral.spec.js` covers the recorded referral status and fields, the
+closed reason vocabulary and required-field validation, the referral POST
+payload with its idempotency header and blank-notes omission, the approve and
+decline decision payloads, the detail/queue refresh after both commands, the
+directory read without a tenant header, the directory outage and Retry,
+contained 400 and 409 problems for both commands, and referral eligibility by
+submission status.
 
 ## Known SPEC gaps in this slice
 
@@ -515,9 +558,17 @@ failure with retry, and a 409 attach conflict that reloads and retries.
 - The Submissions queue reads
   `GET /api/v1/policies/submissions?page=&size=` and filters the loaded page in
   the browser; it does not send `q` or `status` to the API, so a filtered result
-  describes the current page rather than the whole server-side queue. Submission
-  referral and quote records, producers, and documents are not rendered in this
+  describes the current page rather than the whole server-side queue.
+  Submission quote records, producers, and documents are not rendered in this
   slice.
+- The referral panel consumes
+  `POST /api/v1/policies/submissions/{submissionId}/referral` and
+  `POST /api/v1/policies/submissions/{submissionId}/referral/decision` and
+  reads the current referral from the submission detail (an embedded `referral`
+  object or flat `referral*` members). The Policy contract does not publish
+  these operations yet, so the request and response shapes are normalized
+  defensively. Only the current referral is rendered: referral history,
+  separate referral queues, conditions, and expiry are not shown.
 - The predecessor policy cannot render a forward link to its successor because
   `PolicyDto` exposes only `renewedFromPolicyId`; the link is kept on the
   successor record.

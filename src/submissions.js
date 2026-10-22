@@ -1,4 +1,5 @@
 import { partyRecordLabel } from './party.js';
+import { referralFromSubmission } from './referral.js';
 import { addYears } from './renewal.js';
 
 export const SUBMISSION_STATUSES = [
@@ -191,6 +192,9 @@ export function normalizeSubmission(raw) {
     receivedAt: String(firstPresent(raw.receivedAt, raw.submittedAt, raw.createdAt)),
     createdAt: String(firstPresent(raw.createdAt)),
     updatedAt: String(firstPresent(raw.updatedAt)),
+    // The referral workflow belongs to the submission; a detail read embeds
+    // the current referral (or omits it while none has been opened).
+    referral: referralFromSubmission(raw),
     version: raw.version ?? null
   };
 }

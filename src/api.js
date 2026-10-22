@@ -28,7 +28,10 @@ export function newIdempotencyKey() {
  * If-Match, Idempotency-Key, and book headers.
  */
 export async function api(path, options = {}) {
-  const headers = { 'X-EIA-Tenant': TENANT };
+  // `tenant: false` marks public platform master data (the people directory),
+  // which the gateway serves without tenant scoping. Every other call stays
+  // tenant scoped.
+  const headers = options.tenant === false ? {} : { 'X-EIA-Tenant': TENANT };
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   if (options.etag) headers['If-Match'] = options.etag;
   if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;

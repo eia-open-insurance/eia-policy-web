@@ -83,6 +83,34 @@ export async function mockPartySearch(page, items = [PARTY]) {
   });
 }
 
+/**
+ * Serves the public people directory (`GET /api/v1/directory`) used by the
+ * referral person pickers. `status` may be a function so a spec can flip a
+ * transient outage off and retry; the read is expected to carry no tenant
+ * header because the directory is platform master data.
+ */
+export async function mockDirectory(page, { items = [], status = 200, onRequest } = {}) {
+  await page.route('**/api/v1/directory', async (route) => {
+    const url = new URL(route.request().url());
+    if (onRequest) onRequest({ url, headers: route.request().headers() });
+    const resolvedStatus = typeof status === 'function' ? status() : status;
+    if (resolvedStatus !== 200) {
+      await fulfillJson(route, resolvedStatus, {
+        status: resolvedStatus,
+        title: 'People directory unavailable',
+        detail: 'The people directory is temporarily unavailable.',
+        code: 'DIRECTORY_UNAVAILABLE',
+        retryable: true
+      });
+      return;
+    }
+    await fulfillJson(route, 200, {
+      people: items,
+      teams: [{ code: 'UW', label: 'Underwriting' }]
+    });
+  });
+}
+
 /** Drives the EntityPicker typeahead and selects the matching party. */
 export async function selectParty(page, label = PARTY.label) {
   await page.getByPlaceholder('Search by number or name…').fill('Acme');

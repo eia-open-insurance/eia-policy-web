@@ -278,6 +278,34 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   payload and idempotency header, `QUOTED` and `BOUND` eligibility, the optional
   expiration, submission refresh, created-policy selection and URL, premium and
   expiration validation, and contained 400/409 problems.
+- **Referral** panel on the submission detail showing the current referral's
+  `PENDING`/`APPROVED`/`DECLINED` status, reason, authority, referred-to person,
+  notes, deciding person, and timestamp. The current referral is read from the
+  submission detail's embedded `referral` object (flat `referral*` members are
+  tolerated); the submitting action is offered only while the submission is
+  `RECEIVED` or `REFERRED` and no referral is pending or approved.
+- `Refer` dialog with the closed reason vocabulary (`LIMIT`, `PREMIUM`, `TORT`,
+  `APPETITE`, `MANUSCRIPT`, `SANCTIONS`, `CONFLICT`, `OTHER`), an authority,
+  a directory person picker for `referredTo`, and optional notes.
+  `POST /api/v1/policies/submissions/{submissionId}/referral` sends
+  `{reason, authority, referredTo, notes?}` with an `Idempotency-Key`; a blank
+  notes member is omitted. Success starts the referral `PENDING`, moves the
+  submission to `REFERRED`, and refreshes the detail and queue.
+- `Approve referral`/`Decline referral` for a `PENDING` referral, with a
+  directory `decidedBy` picker and optional notes.
+  `POST /api/v1/policies/submissions/{submissionId}/referral/decision` sends
+  `{decision, decidedBy, notes?}` with `APPROVED` or `DECLINED`. The decision
+  resolves the referral only: the submission keeps its status, its terms are
+  unchanged, and no policy is created. Both dialogs keep a 400/409 inside the
+  dialog; a 409 re-reads the submission and queue.
+- Shared people-directory support (`GET /api/v1/directory`, read without the
+  tenant header, cached in memory) and a searchable, keyboard-driven
+  `DirectoryPersonPicker`. A directory outage is contained: person ids remain
+  visible and the dialogs offer a Retry action.
+- Playwright coverage for the recorded referral display, the reason vocabulary,
+  validation, the referral and decision payloads (including blank-notes
+  omission and idempotency), detail/queue refresh, directory lookup, the
+  directory outage/retry, contained 400/409 problems, and referral eligibility.
 
 ### Changed
 

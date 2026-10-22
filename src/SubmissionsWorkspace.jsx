@@ -1,11 +1,36 @@
 import React, { useEffect, useRef, useState } from 'react';
 import CrossLink, { navigateTo } from './navigation.jsx';
+import DirectoryPersonPicker from './DirectoryPersonPicker.jsx';
 import EntityPicker from './EntityPicker.jsx';
 import ProductPicker from './ProductPicker.jsx';
 import { api, newIdempotencyKey, problemMessage } from './api.js';
+import {
+  directoryPersonName,
+  getCachedDirectory,
+  loadDirectory
+} from './directory.js';
 import { formatMoney } from './format.js';
 import { partyEndpoint, partyRecordLabel } from './party.js';
 import { productLabel as productLabelFor } from './products.js';
+import {
+  MAX_REFERRAL_NOTES_LENGTH,
+  REFERRAL_REASONS,
+  defaultReferralDecisionForm,
+  defaultReferralForm,
+  normalizeReferralResult,
+  referralDecisionLabel,
+  referralDecisionPayload,
+  referralCanBeOpened,
+  referralIsPending,
+  referralPayload,
+  referralReasonLabel,
+  referralStatusTone,
+  mergeReferral,
+  submissionReferralDecisionEndpoint,
+  submissionReferralEndpoint,
+  validateReferralDecisionForm,
+  validateReferralForm
+} from './referral.js';
 import {
   MAX_SUBMISSION_NOTES_LENGTH,
   SUBMISSION_STATUSES,
@@ -72,6 +97,21 @@ function detailFromResponse(body, fallbackId) {
 }
 
 /**
+ * Referral commands may answer with the updated submission, a submission
+ * wrapper, or the referral record alone. Only a body that actually carries a
+ * submission is normalized here; a referral-only envelope must not be mistaken
+ * for an empty submission record.
+ */
+function submissionFromCommandResponse(body, fallbackId) {
+  if (!body || typeof body !== 'object') return null;
+  const raw = body.submission
+    || body.item
+    || (body.submissionId || body.submissionNumber ? body : null);
+  if (!raw || typeof raw !== 'object') return null;
+  return detailFromResponse(raw, fallbackId);
+}
+
+/**
  * New-business submissions live before the policy record exists.
  *
  * The tab lists the underwriting queue, creates submissions, and moves them
@@ -107,6 +147,19 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
   const [convertForm, setConvertForm] = useState(() => defaultSubmissionConversionForm(null));
   const [convertBusy, setConvertBusy] = useState(false);
   const [convertError, setConvertError] = useState('');
+  const [directory, setDirectory] = useState(
+    () => getCachedDirectory() || { people: [], teams: [] }
+  );
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directoryError, setDirectoryError] = useState('');
+  const [referralOpen, setReferralOpen] = useState(false);
+  const [referralForm, setReferralForm] = useState(defaultReferralForm);
+  const [referralBusy, setReferralBusy] = useState(false);
+  const [referralError, setReferralError] = useState('');
+  const [decision, setDecision] = useState(null);
+  const [decisionForm, setDecisionForm] = useState(() => defaultReferralDecisionForm());
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  const [decisionError, setDecisionError] = useState('');
   const listRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const labelRequestsRef = useRef(new Set());
@@ -225,6 +278,26 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
     };
   }, [items, selected, applicantLabels]);
 
+  const referralReferredTo = selected?.referral?.referredTo || '';
+  const referralDecidedBy = selected?.referral?.decidedBy || '';
+
+  /**
+   * A recorded referral names directory people by id. Resolve the directory
+   * once when the selected submission carries such an id, so the panel can
+   * show names instead of short UUIDs. A directory failure is contained: the
+   * panel falls back to the id and a dialog read retries.
+   */
+  useEffect(() => {
+    if (!referralReferredTo && !referralDecidedBy) return;
+    const cached = getCachedDirectory();
+    if (cached) {
+      setDirectory(cached);
+      setDirectoryError('');
+      return;
+    }
+    ensureDirectory().catch(() => {});
+  }, [referralReferredTo, referralDecidedBy]);
+
   const visibleSubmissions = items.filter((item) => (
     submissionMatchesFilters(item, { query, status: statusFilter }, applicantLabels)
   ));
@@ -263,6 +336,10 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
     setDetailLoading(false);
     setConvertOpen(false);
     setConvertError('');
+    setReferralOpen(false);
+    setReferralError('');
+    setDecision(null);
+    setDecisionError('');
   }
 
   async function refreshWorkspace() {
@@ -278,6 +355,242 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
     const ok = await loadSubmissionDetail(selected.submissionId);
     await loadSubmissions(page, { quiet: true });
     setNotice(ok ? 'Submission refreshed.' : 'Submission refresh failed.');
+  }
+
+  /**
+   * The people directory is platform master data. It is read lazily when a
+   * referral picker opens, or when the selected referral already carries a
+   * person id that the panel should resolve to a name. The module cache means
+   * reopening a dialog never issues a second read.
+   */
+  async function ensureDirectory() {
+    const cached = getCachedDirectory();
+    if (cached) {
+      setDirectory(cached);
+      setDirectoryError('');
+      return cached;
+    }
+    setDirectoryLoading(true);
+    setDirectoryError('');
+    try {
+      const loaded = await loadDirectory();
+      setDirectory(loaded);
+      return loaded;
+    } catch (e) {
+      setDirectoryError(e.message || 'The people directory is temporarily unavailable.');
+      return null;
+    } finally {
+      setDirectoryLoading(false);
+    }
+  }
+
+  function personDisplay(personId) {
+    if (!personId) return '—';
+    return directoryPersonName(directory.people, personId) || shortId(personId);
+  }
+
+  function applySubmissionUpdate(record) {
+    if (!record?.submissionId) return;
+    setSelected((current) => (
+      current?.submissionId === record.submissionId
+        ? { ...current, ...record }
+        : current
+    ));
+    setItems((current) => current.map((item) => (
+      item.submissionId === record.submissionId ? { ...item, ...record } : item
+    )));
+  }
+
+  function openReferral() {
+    if (!selected || !referralCanBeOpened(selected.status, selected.referral)) return;
+    setReferralForm(defaultReferralForm());
+    setReferralError('');
+    setReferralOpen(true);
+    setNotice('');
+    ensureDirectory().catch(() => {});
+  }
+
+  function closeReferral() {
+    if (referralBusy) return;
+    setReferralOpen(false);
+    setReferralError('');
+  }
+
+  function updateReferral(field, value) {
+    setReferralForm((current) => ({ ...current, [field]: value }));
+    setReferralError('');
+  }
+
+  /**
+   * Opening a referral records the reason, authority, directory person, and
+   * optional notes, then the referral starts PENDING and the submission moves
+   * to REFERRED. The command response is applied optimistically, but the
+   * detail and queue are re-read before the notice is announced.
+   */
+  async function submitReferral(event) {
+    event.preventDefault();
+    if (!selected?.submissionId || referralBusy) return;
+    const target = selected;
+    const validation = validateReferralForm(referralForm);
+    if (validation) {
+      setReferralError(validation);
+      return;
+    }
+    const payload = referralPayload(referralForm);
+    setReferralBusy(true);
+    setReferralError('');
+    try {
+      const result = await api(submissionReferralEndpoint(target.submissionId), {
+        method: 'POST',
+        body: payload,
+        idempotencyKey: newIdempotencyKey()
+      });
+      if (!result.response.ok) {
+        // A 400 validation problem or a 409 stale/duplicate referral conflict
+        // stays in the dialog; a 409 also re-reads the submission so the panel
+        // shows the referral the domain actually holds.
+        setReferralError(
+          problemMessage(result.body, `Referral failed: ${result.response.status}`)
+        );
+        if (result.response.status === 409) {
+          await loadSubmissionDetail(target.submissionId, { quiet: true });
+          await loadSubmissions(page, { quiet: true });
+        }
+        return;
+      }
+
+      const normalized = normalizeReferralResult(result.body);
+      const openedAt = new Date().toISOString();
+      const fallbackReferral = {
+        referralId: '',
+        status: 'PENDING',
+        reason: payload.reason,
+        authority: payload.authority,
+        referredTo: payload.referredTo,
+        notes: payload.notes || '',
+        decidedBy: '',
+        at: openedAt,
+        referredAt: openedAt,
+        decidedAt: ''
+      };
+      const nextReferral = mergeReferral(fallbackReferral, normalized.referral);
+      const fallbackStatus = target.status === 'RECEIVED' ? 'REFERRED' : target.status;
+      const updated = submissionFromCommandResponse(result.body, target.submissionId);
+      applySubmissionUpdate(updated
+        ? { ...updated, referral: updated.referral || nextReferral }
+        : { ...target, status: fallbackStatus, referral: nextReferral });
+
+      setReferralOpen(false);
+      setReferralForm(defaultReferralForm());
+      setReferralError('');
+
+      await loadSubmissionDetail(target.submissionId, { quiet: true });
+      await loadSubmissions(page, { quiet: true });
+
+      const reference = updated?.submissionNumber
+        || target.submissionNumber
+        || submissionReference(target);
+      setNotice(
+        `${result.replayed ? 'Idempotent replay: ' : ''}Referral opened for ${reference} — `
+        + `${referralReasonLabel(payload.reason)} · ${payload.authority}. `
+        + 'The submission is REFERRED and the referral is PENDING.'
+      );
+    } catch (e) {
+      setReferralError(e.message);
+    } finally {
+      setReferralBusy(false);
+    }
+  }
+
+  function openDecision(nextDecision) {
+    if (!selected || !referralIsPending(selected.referral)) return;
+    setDecision(nextDecision);
+    setDecisionForm(defaultReferralDecisionForm(nextDecision));
+    setDecisionError('');
+    setNotice('');
+    ensureDirectory().catch(() => {});
+  }
+
+  function closeDecision() {
+    if (decisionBusy) return;
+    setDecision(null);
+    setDecisionError('');
+  }
+
+  function updateDecision(field, value) {
+    setDecisionForm((current) => ({ ...current, [field]: value }));
+    setDecisionError('');
+  }
+
+  /**
+   * Approve/decline resolves the pending referral only. It records the
+   * directory person who decided it and optional notes; it never changes the
+   * submission status, its terms, or a policy.
+   */
+  async function submitDecision(event) {
+    event.preventDefault();
+    if (!selected?.submissionId || !decision || decisionBusy) return;
+    const target = selected;
+    const validation = validateReferralDecisionForm({ ...decisionForm, decision });
+    if (validation) {
+      setDecisionError(validation);
+      return;
+    }
+    const payload = referralDecisionPayload({ ...decisionForm, decision });
+    setDecisionBusy(true);
+    setDecisionError('');
+    try {
+      const result = await api(submissionReferralDecisionEndpoint(target.submissionId), {
+        method: 'POST',
+        body: payload
+      });
+      if (!result.response.ok) {
+        setDecisionError(
+          problemMessage(result.body, `Referral decision failed: ${result.response.status}`)
+        );
+        if (result.response.status === 409) {
+          await loadSubmissionDetail(target.submissionId, { quiet: true });
+          await loadSubmissions(page, { quiet: true });
+        }
+        return;
+      }
+
+      const normalized = normalizeReferralResult(result.body);
+      const decidedAt = new Date().toISOString();
+      const fallbackReferral = {
+        ...(target.referral || {}),
+        status: payload.decision,
+        decidedBy: payload.decidedBy,
+        notes: payload.notes || target.referral?.notes || '',
+        at: decidedAt,
+        decidedAt
+      };
+      const nextReferral = mergeReferral(fallbackReferral, normalized.referral);
+      const updated = submissionFromCommandResponse(result.body, target.submissionId);
+      applySubmissionUpdate(updated
+        ? { ...updated, referral: updated.referral || nextReferral }
+        : { ...target, referral: nextReferral });
+
+      setDecision(null);
+      setDecisionForm(defaultReferralDecisionForm());
+      setDecisionError('');
+
+      await loadSubmissionDetail(target.submissionId, { quiet: true });
+      await loadSubmissions(page, { quiet: true });
+
+      const reference = updated?.submissionNumber
+        || target.submissionNumber
+        || submissionReference(target);
+      setNotice(
+        `${result.replayed ? 'Idempotent replay: ' : ''}Referral `
+        + `${payload.decision === 'APPROVED' ? 'approved' : 'declined'} for ${reference} by `
+        + `${personDisplay(payload.decidedBy)}.`
+      );
+    } catch (e) {
+      setDecisionError(e.message);
+    } finally {
+      setDecisionBusy(false);
+    }
   }
 
   function goToPage(pageNumber) {
@@ -515,6 +828,11 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
   const selectedActions = selected ? submissionActionsFor(selected.status) : [];
   const selectedNumber = selected ? submissionReference(selected) : '';
   const selectedConvertible = selected ? submissionCanConvert(selected.status) : false;
+  const selectedReferral = selected?.referral || null;
+  const selectedReferralPending = referralIsPending(selectedReferral);
+  const selectedReferralCanOpen = Boolean(
+    selected && referralCanBeOpened(selected.status, selectedReferral)
+  );
 
   return (
     <section className="eia-submissions" data-testid="submissions-workspace">
@@ -909,6 +1227,109 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
               </div>
 
               <section
+                className="eia-card eia-submission-referral"
+                aria-label="Submission referral"
+                data-testid="submission-referral-panel"
+              >
+                <div className="eia-submission-referral-head">
+                  <div>
+                    <h3>Referral</h3>
+                    <p className="eia-muted eia-submission-action-lede">
+                      A referral records the underwriting decision request. Approving or declining
+                      it resolves the referral only: it does not change the submission status or its
+                      terms, and it never creates a policy.
+                    </p>
+                  </div>
+                  {selectedReferral && (
+                    <span
+                      className={`eia-pill ${referralStatusTone(selectedReferral.status)}`}
+                      data-testid="referral-status"
+                    >
+                      {selectedReferral.status || 'UNKNOWN'}
+                    </span>
+                  )}
+                </div>
+
+                {selectedReferral ? (
+                  <dl className="eia-kv eia-submission-referral-fields">
+                    <dt>Reason</dt>
+                    <dd data-testid="referral-reason">
+                      {selectedReferral.reason
+                        ? `${referralReasonLabel(selectedReferral.reason)} (${selectedReferral.reason})`
+                        : '—'}
+                    </dd>
+                    <dt>Authority</dt>
+                    <dd data-testid="referral-authority">{selectedReferral.authority || '—'}</dd>
+                    <dt>Referred to</dt>
+                    <dd data-testid="referral-referred-to" title={selectedReferral.referredTo}>
+                      {personDisplay(selectedReferral.referredTo)}
+                    </dd>
+                    <dt>Notes</dt>
+                    <dd className="eia-submission-notes" data-testid="referral-notes">
+                      {selectedReferral.notes || '—'}
+                    </dd>
+                    <dt>Decided by</dt>
+                    <dd data-testid="referral-decided-by" title={selectedReferral.decidedBy}>
+                      {personDisplay(selectedReferral.decidedBy)}
+                    </dd>
+                    <dt>At</dt>
+                    <dd data-testid="referral-at">{formatTimestamp(selectedReferral.at)}</dd>
+                  </dl>
+                ) : (
+                  <p
+                    className="eia-muted eia-submission-referral-empty"
+                    data-testid="referral-empty"
+                  >
+                    No referral has been opened for this submission.
+                  </p>
+                )}
+
+                {directoryError && (selectedReferral?.referredTo || selectedReferral?.decidedBy) ? (
+                  <p
+                    className="eia-muted eia-submission-referral-hint"
+                    data-testid="referral-directory-unavailable"
+                  >
+                    The people directory is unavailable; person ids are shown instead of names.
+                  </p>
+                ) : null}
+
+                {selectedReferralPending ? (
+                  <div className="eia-submission-status-actions" data-testid="referral-actions">
+                    <button
+                      type="button"
+                      data-testid="referral-approve"
+                      onClick={() => openDecision('APPROVED')}
+                    >
+                      Approve referral
+                    </button>
+                    <button
+                      type="button"
+                      className="eia-btn-secondary"
+                      data-testid="referral-decline"
+                      onClick={() => openDecision('DECLINED')}
+                    >
+                      Decline referral
+                    </button>
+                  </div>
+                ) : selectedReferralCanOpen ? (
+                  <div className="eia-submission-status-actions" data-testid="referral-actions">
+                    <button type="button" data-testid="submission-refer" onClick={openReferral}>
+                      {selectedReferral ? 'Refer again' : 'Refer'}
+                    </button>
+                  </div>
+                ) : (
+                  <p
+                    className="eia-muted eia-submission-referral-hint"
+                    data-testid="referral-unavailable"
+                  >
+                    {selectedReferral?.status === 'APPROVED'
+                      ? 'The referral has been approved; no further referral is available for this submission.'
+                      : 'Referral is available only while the submission is RECEIVED or REFERRED.'}
+                  </p>
+                )}
+              </section>
+
+              <section
                 className="eia-card eia-submission-convert"
                 aria-label="Convert submission to policy"
                 data-testid="submission-convert-panel"
@@ -961,6 +1382,11 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
                   <b>Conversion is explicit.</b> Convert to policy on a QUOTED or BOUND submission
                   creates the DRAFT policy in the Policy domain and binds the submission; quoting or
                   binding the submission on its own never creates a policy record.
+                </p>
+                <p>
+                  <b>The referral workflow is separate from the status actions.</b> A referral
+                  records the reason, authority, directory decision owner, and notes. Approving or
+                  declining it resolves the referral only; the submission keeps its own status.
                 </p>
               </section>
             </>
@@ -1216,12 +1642,255 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
               </div>
             </form>
 
+            {action.status === 'REFERRED' && (
+              <p
+                className="eia-submission-referral-hint"
+                data-testid="submission-action-referral-hint"
+              >
+                This move records the REFERRED status only. Open a referral from the Referral panel
+                to record the reason, authority, directory person, and notes.
+              </p>
+            )}
+
             {['QUOTED', 'BOUND'].includes(action.status) && (
               <p className="eia-submission-no-policy" data-testid="submission-action-no-policy">
                 <b>No policy is created by this action.</b> Quoting or binding a submission does not
                 create a policy yet; use Convert to policy to create the DRAFT policy record.
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {referralOpen && selected && (
+        <div className="eia-modal-backdrop">
+          <div
+            className="eia-modal eia-submission-referral-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="submission-referral-dialog-title"
+            aria-describedby="submission-referral-dialog-description"
+            data-testid="submission-referral-dialog"
+          >
+            <div className="eia-section-title" style={{ marginTop: 0 }}>
+              <h2 id="submission-referral-dialog-title">Refer submission · {selectedNumber}</h2>
+              <span className={`eia-pill ${submissionStatusTone(selected.status)}`}>
+                {selected.status}
+              </span>
+            </div>
+            <p className="eia-modal-lede" id="submission-referral-dialog-description">
+              Record why this submission needs a decision and who decides it. The referral starts
+              <b> PENDING</b> and the submission moves to <b>REFERRED</b>.
+            </p>
+
+            {referralError && (
+              <p role="alert" className="eia-modal-error" data-testid="referral-form-error">
+                {referralError}
+              </p>
+            )}
+
+            {directoryError && (
+              <p role="alert" className="eia-modal-error" data-testid="referral-directory-error">
+                {directoryError}
+              </p>
+            )}
+
+            <form className="eia-form-grid" onSubmit={submitReferral}>
+              <div className="eia-field">
+                <label htmlFor="submission-referral-reason">Reason</label>
+                <select
+                  id="submission-referral-reason"
+                  value={referralForm.reason}
+                  onChange={(event) => updateReferral('reason', event.target.value)}
+                >
+                  <option value="">Select a reason…</option>
+                  {REFERRAL_REASONS.map((entry) => (
+                    <option key={entry.code} value={entry.code}>
+                      {entry.label} ({entry.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="eia-field">
+                <label htmlFor="submission-referral-authority">Authority</label>
+                <input
+                  id="submission-referral-authority"
+                  placeholder="e.g. Chief Underwriting Officer"
+                  value={referralForm.authority}
+                  onChange={(event) => updateReferral('authority', event.target.value)}
+                />
+                <span className="eia-field-hint">
+                  The authority that will decide the referral, such as a role or committee.
+                </span>
+              </div>
+
+              <div className="eia-field span-3">
+                <label htmlFor="submission-referral-referred-to">Referred to</label>
+                <DirectoryPersonPicker
+                  id="submission-referral-referred-to"
+                  people={directory.people}
+                  value={referralForm.referredTo}
+                  onChange={(person) => updateReferral('referredTo', person?.id || '')}
+                  loading={directoryLoading}
+                />
+                <span className="eia-field-hint">
+                  Directory person who owns the referral decision.
+                </span>
+                {directoryError && (
+                  <button
+                    type="button"
+                    className="eia-btn-secondary"
+                    data-testid="referral-directory-retry"
+                    onClick={() => ensureDirectory()}
+                    disabled={directoryLoading}
+                  >
+                    Retry directory
+                  </button>
+                )}
+              </div>
+
+              <div className="eia-field span-3">
+                <label htmlFor="submission-referral-notes">Notes (optional)</label>
+                <textarea
+                  id="submission-referral-notes"
+                  rows={3}
+                  maxLength={MAX_REFERRAL_NOTES_LENGTH}
+                  placeholder="Referral context, conditions, or the decision requested"
+                  value={referralForm.notes}
+                  onChange={(event) => updateReferral('notes', event.target.value)}
+                />
+              </div>
+
+              <div className="eia-field span-3 eia-modal-actions">
+                <button type="submit" disabled={referralBusy}>
+                  {referralBusy ? 'Opening referral…' : 'Refer submission'}
+                </button>
+                <button
+                  type="button"
+                  className="eia-btn-secondary"
+                  onClick={closeReferral}
+                  disabled={referralBusy}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+
+            <section className="eia-context-panel" aria-label="Referral context">
+              <h4>Referral is not a policy or a declination</h4>
+              <p>
+                <b>Opening a referral records the decision request.</b> The submission moves to
+                REFERRED; its applicant, product, limits, and premium are unchanged.
+              </p>
+              <p>
+                <b>Approve or decline resolves the referral only.</b> A declined referral does not
+                withdraw or decline the submission; choose that submission status action separately.
+              </p>
+            </section>
+          </div>
+        </div>
+      )}
+
+      {decision && selected && (
+        <div className="eia-modal-backdrop">
+          <div
+            className="eia-modal eia-submission-referral-decision-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="submission-referral-decision-title"
+            aria-describedby="submission-referral-decision-description"
+            data-testid="referral-decision-dialog"
+          >
+            <div className="eia-section-title" style={{ marginTop: 0 }}>
+              <h2 id="submission-referral-decision-title">
+                {referralDecisionLabel(decision)} referral · {selectedNumber}
+              </h2>
+              <span className="eia-pill amber">PENDING</span>
+            </div>
+            <p className="eia-modal-lede" id="submission-referral-decision-description">
+              The referral will be recorded as <b>{decision}</b>. The submission keeps its current
+              status ({selected.status}); only the referral decision changes.
+            </p>
+
+            {decisionError && (
+              <p role="alert" className="eia-modal-error" data-testid="referral-decision-error">
+                {decisionError}
+              </p>
+            )}
+
+            {directoryError && (
+              <p role="alert" className="eia-modal-error" data-testid="referral-directory-error">
+                {directoryError}
+              </p>
+            )}
+
+            <form className="eia-form-grid" onSubmit={submitDecision}>
+              <div className="eia-field span-3">
+                <label htmlFor="submission-referral-decided-by">Decided by</label>
+                <DirectoryPersonPicker
+                  id="submission-referral-decided-by"
+                  people={directory.people}
+                  value={decisionForm.decidedBy}
+                  onChange={(person) => updateDecision('decidedBy', person?.id || '')}
+                  loading={directoryLoading}
+                />
+                <span className="eia-field-hint">
+                  Directory person who made the referral decision.
+                </span>
+                {directoryError && (
+                  <button
+                    type="button"
+                    className="eia-btn-secondary"
+                    data-testid="referral-directory-retry"
+                    onClick={() => ensureDirectory()}
+                    disabled={directoryLoading}
+                  >
+                    Retry directory
+                  </button>
+                )}
+              </div>
+
+              <div className="eia-field span-3">
+                <label htmlFor="submission-referral-decision-notes">Notes (optional)</label>
+                <textarea
+                  id="submission-referral-decision-notes"
+                  rows={3}
+                  maxLength={MAX_REFERRAL_NOTES_LENGTH}
+                  placeholder="Decision conditions or rationale"
+                  value={decisionForm.notes}
+                  onChange={(event) => updateDecision('notes', event.target.value)}
+                />
+              </div>
+
+              <div className="eia-field span-3 eia-modal-actions">
+                <button
+                  type="submit"
+                  disabled={decisionBusy}
+                  data-testid="referral-decision-submit"
+                >
+                  {decisionBusy ? 'Recording…' : `${referralDecisionLabel(decision)} referral`}
+                </button>
+                <button
+                  type="button"
+                  className="eia-btn-secondary"
+                  onClick={closeDecision}
+                  disabled={decisionBusy}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+
+            <section className="eia-context-panel" aria-label="Referral decision context">
+              <h4>The submission status is separate</h4>
+              <p>
+                <b>This decision resolves the referral.</b>
+                {decision === 'APPROVED'
+                  ? ' Approval lets the submission continue through underwriting.'
+                  : ' A declined referral leaves the submission open; decline or withdraw the submission separately.'}
+              </p>
+            </section>
           </div>
         </div>
       )}

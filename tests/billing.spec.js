@@ -84,7 +84,10 @@ function policyPayment(overrides = {}) {
 }
 
 function summarize(rows, planRow = PLAN) {
-  const total = Number(planRow.totalPremiumAmount);
+  const planTotal = Number(planRow?.totalPremiumAmount);
+  const total = Number.isFinite(planTotal)
+    ? planTotal
+    : rows.reduce((sum, row) => sum + Number(row.amount), 0);
   const amountFor = (status) => rows
     .filter((row) => row.status === status)
     .reduce((sum, row) => sum + Number(row.amount), 0);
@@ -147,6 +150,7 @@ function problem(status, detail, code) {
  * the follow-up GET that the tab performs after every mutation.
  */
 async function installMocks(page, options = {}) {
+  const policy = { ...POLICY, ...(options.policy || {}) };
   const state = {
     plan: options.plan ? { ...options.plan } : null,
     installments: (options.installments || []).map((row) => ({ ...row })),
@@ -174,11 +178,11 @@ async function installMocks(page, options = {}) {
     const method = request.method();
 
     if (method === 'GET' && url.pathname === '/api/v1/policies') {
-      await json(route, 200, envelope([POLICY]));
+      await json(route, 200, envelope([policy]));
       return;
     }
     if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}`) {
-      await json(route, 200, POLICY, { ETag: '"4"' });
+      await json(route, 200, policy, { ETag: '"4"' });
       return;
     }
     if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}/versions/current`) {
@@ -273,6 +277,10 @@ async function installMocks(page, options = {}) {
       await json(route, 200, state.installments.find((row) => row.id === id));
       return;
     }
+    if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}/endorsements`) {
+      await json(route, 200, envelope([]));
+      return;
+    }
     if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}/credit-notes`) {
       await json(route, 200, { items: [] });
       return;
@@ -360,6 +368,7 @@ test('creates a billing plan with the selected policy premium and server payload
   await expect(empty).toContainText('Not scheduled');
   await expect(empty).toContainText('$120,000.00');
   await expect(empty).toContainText('USD');
+  await expect(page.getByTestId('billing-premium-variance')).toHaveCount(0);
 
   const count = page.getByLabel('Installment count');
   await expect(count).toHaveAttribute('min', '1');
@@ -904,4 +913,83 @@ test('reports a create conflict when a plan already exists', async ({ page }) =>
   await expect(page.getByTestId('billing-empty')).toBeVisible();
   expect(state.planPosts).toHaveLength(1);
   expect(state.billingGets).toBe(2);
+});
+
+test('warns when the policy premium is above the billing plan total', async ({ page }) => {
+  await installMocks(page, {
+    plan: { ...PLAN, totalPremiumAmount: '100000.00' },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  const warning = page.getByTestId('billing-premium-variance');
+  await expect(warning).toBeVisible();
+  await expect(page.getByTestId('billing-premium-variance-message')).toHaveText(
+    'Policy premium $120,000.00 differs from the billing plan total $100,000.00 by $20,000.00.'
+  );
+  await expect(warning).toContainText('does not automatically re-plan existing billing');
+  await expect(warning.getByTestId('billing-premium-variance-action'))
+    .toHaveText('Review premium audit');
+});
+
+test('warns when the policy premium is below the billing plan total', async ({ page }) => {
+  await installMocks(page, {
+    plan: { ...PLAN, totalPremiumAmount: '125000.50' },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-premium-variance-message')).toHaveText(
+    'Policy premium $120,000.00 differs from the billing plan total $125,000.50 by $5,000.50.'
+  );
+});
+
+test('shows no variance warning when the plan total matches at cent precision', async ({ page }) => {
+  await installMocks(page, {
+    plan: { ...PLAN, totalPremiumAmount: '120000.0040' },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-summary-total')).toHaveText('$120,000.00');
+  await expect(page.getByTestId('billing-premium-variance')).toHaveCount(0);
+});
+
+test('shows no variance warning when the plan total is missing', async ({ page }) => {
+  const planWithoutTotal = { ...PLAN };
+  delete planWithoutTotal.totalPremiumAmount;
+  await installMocks(page, { plan: planWithoutTotal, installments: [installment(1)] });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-plan-meta')).toContainText('BIL-2026-0000001');
+  await expect(page.getByTestId('billing-premium-variance')).toHaveCount(0);
+});
+
+test('shows no variance warning when the policy premium is missing', async ({ page }) => {
+  await installMocks(page, {
+    policy: { premiumAmount: null },
+    plan: { ...PLAN, totalPremiumAmount: '100000.00' },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-policy-context')).toContainText('Policy premium —');
+  await expect(page.getByTestId('billing-premium-variance')).toHaveCount(0);
+});
+
+test('opens the Endorsements premium audit from the variance warning', async ({ page }) => {
+  await installMocks(page, {
+    plan: { ...PLAN, totalPremiumAmount: '100000.00' },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId('billing-premium-variance-action').click();
+
+  await expect(page.getByRole('tab', { name: 'Endorsements' }))
+    .toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tabpanel', { name: 'Endorsements' })).toBeVisible();
+  const dialog = page.getByTestId('premium-audit-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(`Record premium audit for ${POLICY.policyNumber}`);
 });

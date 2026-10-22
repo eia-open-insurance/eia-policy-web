@@ -319,6 +319,54 @@ export function emptyBillingState() {
 }
 
 /**
+ * Parses a decimal money value to integer cents without going through a float.
+ * Billing stores premium totals with four decimal places, and `Number` rounding
+ * would make a sub-cent remainder look like a real variance. Anything that is
+ * not a finite amount is unknown, which callers treat as "nothing to compare".
+ */
+export function amountToCents(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? Math.round(value * 100) : null;
+  }
+  const text = String(value).trim().replace(/,/g, '');
+  if (!text) return null;
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(text);
+  if (!match) {
+    const parsed = Number(text);
+    return Number.isFinite(parsed) ? Math.round(parsed * 100) : null;
+  }
+  const sign = match[1] === '-' ? -1 : 1;
+  const fraction = match[3] || '';
+  const cents = Number(match[2]) * 100 + Number(fraction.slice(0, 2).padEnd(2, '0'));
+  const roundUp = Number(fraction.slice(2, 3) || 0) >= 5;
+  return sign * (cents + (roundUp ? 1 : 0));
+}
+
+/**
+ * Compares the selected policy's written premium with the billing plan's
+ * scheduled total. Both sides must be present; a missing amount is not a
+ * variance, it is an unanswerable comparison. Amounts are compared at cent
+ * precision so a decimal-column remainder never raises a false warning. The
+ * result is a display-ready difference, not a command: a premium audit or
+ * endorsement never rewrites the collection schedule.
+ */
+export function billingPremiumVariance(policy, plan) {
+  const policyCents = amountToCents(policy?.premiumAmount);
+  const planCents = amountToCents(plan?.totalPremiumAmount);
+  if (policyCents === null || planCents === null) return null;
+  const deltaCents = policyCents - planCents;
+  return {
+    policyCents,
+    planCents,
+    deltaCents,
+    differenceCents: Math.abs(deltaCents),
+    differs: deltaCents !== 0,
+    direction: deltaCents === 0 ? 'EQUAL' : deltaCents > 0 ? 'POLICY_HIGHER' : 'PLAN_HIGHER'
+  };
+}
+
+/**
  * The credited/outstanding columns appear only when the billing read carries
  * those fields. Older servers keep the original six-column table.
  */

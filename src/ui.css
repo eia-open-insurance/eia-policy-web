@@ -945,6 +945,26 @@ main [role="status"] {
   color: var(--eia-muted);
   font-size: 12px;
 }
+.eia-billing-premium-variance {
+  margin-top: 12px;
+  border-left: 3px solid var(--eia-amber);
+  background: #fffaf0;
+}
+.eia-billing-premium-variance-message {
+  margin: 0;
+  color: #5c3f00;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.eia-billing-premium-variance-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.eia-billing-premium-variance-actions .eia-muted { font-size: 11px; }
 .eia-billing-overdue-card { border-top: 3px solid var(--eia-red); }
 main tr.eia-billing-overdue-row td { background: #fff7f7 !important; }
 main tr.eia-billing-overdue-row:hover td { background: #ffefef !important; }

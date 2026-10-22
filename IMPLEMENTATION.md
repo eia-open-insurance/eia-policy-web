@@ -128,6 +128,16 @@ installment to the Payment workbench through
 Policy never posts a payment, and the plan never changes coverage or the policy
 version.
 
+When the selected policy's written premium and the billing plan's scheduled total
+are both present, the Billing tab compares them at cent precision. A difference
+shows `Policy premium $X differs from the billing plan total $Y by $Z.` with a
+note that a premium audit or endorsement changes written premium but does not
+automatically re-plan existing installments. The `Review premium audit` action
+switches to Endorsements and opens the audit dialog when the policy status
+allows it (otherwise it lands on the tab, where the unavailable reason is
+shown). A missing plan, or a missing amount on either side, is not a variance
+and renders no warning.
+
 When an installment carries a `paymentId`, the Billing tab reads
 `GET /api/v1/payments/{id}` for each distinct linked payment and keeps that
 Payment's own status. A status of `REVERSED`, `RETURNED`, `VOID`, `CANCELLED`, or
@@ -270,7 +280,10 @@ payment-picker query and tenant header, selection and apply payload, linked
 payment id/number, amount warning, empty state, picker read failure/retry, a
 409 link conflict, linked-payment status display and review warnings for a
 non-PAID payment (including the summary count, Payment record link, and
-contained detail-read failure), and the no-warning PAID case;
+contained detail-read failure), the no-warning PAID case, the premium-vs-plan
+variance warning (policy higher and plan higher at cent precision), the
+equal and missing-amount no-warning cases, and the warning's Endorsements
+premium-audit action;
 `tests/credit-notes.spec.js` covers the credited/net billing
 summary and conditional credited/outstanding installment columns, the empty
 ledger, the create modal's unpaid default and fixed policy currency, the draft

@@ -9,6 +9,7 @@ import {
   billingHasCreditFields,
   billingPaymentHref,
   billingPlanPayload,
+  billingPremiumVariance,
   billingStatusTone,
   canCreatePayment,
   canManageInstallment,
@@ -1873,6 +1874,16 @@ export default function App() {
     }
   }
 
+  /**
+   * The variance warning is advisory. The action switches to Endorsements,
+   * where a premium audit can be recorded when the policy status allows it;
+   * the billing installments are never rewritten from the warning.
+   */
+  function reviewPremiumVariance() {
+    selectTab('endorsements');
+    openPremiumAudit();
+  }
+
   async function updateInstallment(installment, status) {
     if (!selected || !installment?.id) return;
     setError('');
@@ -2779,6 +2790,11 @@ export default function App() {
     billing.installments,
     paymentDetails
   );
+  const billingVariance = billingPremiumVariance(selectedPolicy, billing.plan);
+  const billingVarianceCurrency = selectedPolicy?.premiumCurrency
+    || billing.plan?.currency
+    || billing.summary?.currency
+    || '';
 
   return (
     <main>
@@ -5075,6 +5091,45 @@ export default function App() {
                           </>
                         ) : null}
                       </p>
+
+                      {billingVariance?.differs && (
+                        <section
+                          className="eia-card eia-billing-premium-variance"
+                          role="note"
+                          aria-label="Premium variance"
+                          data-testid="billing-premium-variance"
+                        >
+                          <p
+                            className="eia-billing-premium-variance-message"
+                            data-testid="billing-premium-variance-message"
+                          >
+                            {`Policy premium ${formatMoney(billingVariance.policyCents / 100, billingVarianceCurrency)} differs from the billing plan total ${formatMoney(billingVariance.planCents / 100, billingVarianceCurrency)} by ${formatMoney(billingVariance.differenceCents / 100, billingVarianceCurrency)}.`}
+                          </p>
+                          <p className="eia-billing-copy">
+                            A premium audit or endorsement changes the policy&apos;s written
+                            premium, but it does not automatically re-plan existing billing
+                            installments. The plan keeps its scheduled collection amounts until
+                            it is deliberately adjusted.
+                          </p>
+                          <div className="eia-billing-premium-variance-actions">
+                            <button
+                              type="button"
+                              className="eia-btn-secondary"
+                              data-testid="billing-premium-variance-action"
+                              onClick={reviewPremiumVariance}
+                              title={premiumAuditAllowed
+                                ? 'Open Endorsements and record a premium audit'
+                                : premiumAuditHint}
+                            >
+                              {premiumAuditAllowed ? 'Review premium audit' : 'Open Endorsements'}
+                            </button>
+                            <span className="eia-muted">
+                              Billing plan adjustments follow the premium change; installments
+                              are not recalculated automatically.
+                            </span>
+                          </div>
+                        </section>
+                      )}
 
                       <div className="eia-summary-grid" aria-label="Billing summary">
                         <div className="eia-card">

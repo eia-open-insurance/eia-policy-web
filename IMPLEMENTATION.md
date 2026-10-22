@@ -109,6 +109,16 @@ installment to the Payment workbench through
 Policy never posts a payment, and the plan never changes coverage or the policy
 version.
 
+When an installment carries a `paymentId`, the Billing tab reads
+`GET /api/v1/payments/{id}` for each distinct linked payment and keeps that
+Payment's own status. A status of `REVERSED`, `RETURNED`, `VOID`, `CANCELLED`, or
+`FAILED` shows a `Payment <status> — installment may need review` warning badge
+with a link to `/payment?record=<paymentId>`, and the billing summary states how
+many installments link to a payment that is no longer PAID. The warning is
+advisory: the installment status is never changed automatically, and a failed
+payment read is contained as an unavailable status instead of a tab error or a
+warning.
+
 Credit notes sit at the bottom of the Billing tab, after the installments. The
 section reads `GET /api/v1/policies/{policyId}/credit-notes` alongside the
 billing plan and renders an issued total (ISSUED + APPLIED notes) and an applied
@@ -182,7 +192,8 @@ reinstatement failure keeps the existing page-level problem handling.
 `src/billing.js` holds the pure billing helpers: plan form defaults and payload,
 form validation, tolerant normalization of the billing read (plan, installments,
 summary), status/action rules, the Payment hand-off URL, the policy-payment
-source query, tolerant payment normalization, payment status tone, amount
+source query, tolerant payment normalization, the linked-payment detail endpoint
+and status/review rules, the Payment record link, payment status tone, amount
 comparison for reconciliation, the link payload, and the credited/outstanding
 normalization that decides when the credit columns apply.
 `src/creditNotes.js` holds
@@ -237,8 +248,11 @@ refetch, card refresh, and payload summaries; `tests/billing.spec.js` covers the
 plan payload, policy premium context, summary, mark paid/waive PATCH payloads,
 overdue rows, the Payment hand-off URL, read failures, 409 conflicts, the
 payment-picker query and tenant header, selection and apply payload, linked
-payment id/number, amount warning, empty state, picker read failure/retry, and a
-409 link conflict; `tests/credit-notes.spec.js` covers the credited/net billing
+payment id/number, amount warning, empty state, picker read failure/retry, a
+409 link conflict, linked-payment status display and review warnings for a
+non-PAID payment (including the summary count, Payment record link, and
+contained detail-read failure), and the no-warning PAID case;
+`tests/credit-notes.spec.js` covers the credited/net billing
 summary and conditional credited/outstanding installment columns, the empty
 ledger, the create modal's unpaid default and fixed policy currency, the draft
 POST payload and idempotency header, the derived issued/applied totals, issue

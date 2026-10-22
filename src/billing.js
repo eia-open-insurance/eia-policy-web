@@ -457,6 +457,56 @@ export function normalizePolicyPayments(body) {
     .filter((row) => row !== null);
 }
 
+/** GET /api/v1/payments/{id}: the Payment owns its lifecycle status. */
+export function paymentDetailEndpoint(paymentId) {
+  if (!paymentId) return '';
+  return `/api/v1/payments/${encodeURIComponent(paymentId)}`;
+}
+
+/** Tolerant read of a single Payment; a direct or `{payment}` body is accepted. */
+export function normalizePaymentDetail(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const candidate = body.payment && typeof body.payment === 'object'
+    && !Array.isArray(body.payment)
+    ? body.payment
+    : body.item && typeof body.item === 'object' && !Array.isArray(body.item)
+      ? body.item
+      : body;
+  return normalizePayment(candidate);
+}
+
+/** A linked Payment is read-only context; its record lives in Payment. */
+export function paymentRecordHref(paymentId) {
+  if (!paymentId) return '/payment';
+  return `/payment?record=${encodeURIComponent(paymentId)}`;
+}
+
+/**
+ * A linked payment that has left the collected state is evidence for review,
+ * not a command to rewrite the installment. Only Payment terminal statuses that
+ * invalidate the collection link are flagged; approval/settlement states are
+ * not a collection failure.
+ */
+export const PAYMENT_REVIEW_STATUSES = ['REVERSED', 'RETURNED', 'VOID', 'CANCELLED', 'FAILED'];
+
+export function paymentStatusNeedsReview(status) {
+  return PAYMENT_REVIEW_STATUSES.includes(String(status || '').toUpperCase());
+}
+
+export function paymentReviewWarning(status) {
+  const normalized = String(status || '').toUpperCase();
+  return normalized ? `Payment ${normalized} — installment may need review` : '';
+}
+
+/** Counts installments, not payments, whose linked payment is no longer PAID. */
+export function countInstallmentsNeedingPaymentReview(installments, paymentDetails) {
+  return (Array.isArray(installments) ? installments : []).filter((installment) => {
+    const paymentId = String(installment?.paymentId || '');
+    if (!paymentId) return false;
+    return paymentStatusNeedsReview(paymentDetails?.[paymentId]?.status);
+  }).length;
+}
+
 export function paymentStatusTone(status) {
   const normalized = String(status || '').toUpperCase();
   if (['APPROVED', 'SCHEDULED', 'SUBMITTED', 'ACCEPTED', 'PROCESSING', 'PARTIALLY_PAID',

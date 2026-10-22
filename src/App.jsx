@@ -12,13 +12,19 @@ import {
   billingStatusTone,
   canCreatePayment,
   canManageInstallment,
+  countInstallmentsNeedingPaymentReview,
   defaultBillingForm,
   emptyBillingState,
   installmentPaymentPayload,
   isOverdue,
   normalizeBilling,
+  normalizePaymentDetail,
   normalizePolicyPayments,
   paymentAmountDiffers,
+  paymentDetailEndpoint,
+  paymentRecordHref,
+  paymentReviewWarning,
+  paymentStatusNeedsReview,
   paymentStatusTone,
   policyPaymentsEndpoint,
   validateBillingForm
@@ -429,6 +435,8 @@ export default function App() {
   const [billingInstallmentId, setBillingInstallmentId] = useState(null);
   const [linkPaymentInstallment, setLinkPaymentInstallment] = useState(null);
   const [linkedPayments, setLinkedPayments] = useState({});
+  const [paymentDetails, setPaymentDetails] = useState({});
+  const paymentDetailsRequestRef = useRef(0);
 
   async function load(pageToLoad = 0) {
     setLoading(true);
@@ -743,7 +751,9 @@ export default function App() {
     const requestId = billingRequestRef.current + 1;
     billingRequestRef.current = requestId;
     if (!policyId) {
+      paymentDetailsRequestRef.current += 1;
       setBilling(emptyBillingState());
+      setPaymentDetails({});
       return;
     }
     setBilling((current) => ({ ...current, loading: true, error: '' }));
@@ -751,10 +761,14 @@ export default function App() {
       const result = await api(`/api/v1/policies/${policyId}/billing`);
       if (billingRequestRef.current !== requestId) return;
       if (result.response.status === 204 || result.response.status === 404) {
+        paymentDetailsRequestRef.current += 1;
+        setPaymentDetails({});
         setBilling({ ...emptyBillingState(), loading: false });
         return;
       }
       if (!result.response.ok) {
+        paymentDetailsRequestRef.current += 1;
+        setPaymentDetails({});
         setBilling({
           ...emptyBillingState(),
           loading: false,
@@ -762,13 +776,17 @@ export default function App() {
         });
         return;
       }
+      const normalized = normalizeBilling(result.body, policy);
       setBilling({
-        ...normalizeBilling(result.body, policy),
+        ...normalized,
         loading: false,
         error: ''
       });
+      loadPaymentDetails(normalized.installments, requestId).catch(() => {});
     } catch {
       if (billingRequestRef.current !== requestId) return;
+      paymentDetailsRequestRef.current += 1;
+      setPaymentDetails({});
       setBilling({
         ...emptyBillingState(),
         loading: false,
@@ -777,9 +795,73 @@ export default function App() {
     }
   }
 
+  /**
+   * Payment owns the linked payment's status. Each installment that stores a
+   * paymentId is reconciled against GET /api/v1/payments/{id} so a reversal,
+   * return, void, cancellation, or failure is visible on the Billing tab. The
+   * read is advisory: it never edits the installment or the Payment, and a
+   * failed read is contained as an unavailable status instead of a tab error.
+   */
+  async function loadPaymentDetails(installments, billingRequestId) {
+    const requestId = paymentDetailsRequestRef.current + 1;
+    paymentDetailsRequestRef.current = requestId;
+    const paymentIds = Array.from(new Set(
+      (Array.isArray(installments) ? installments : [])
+        .map((row) => String(row?.paymentId || ''))
+        .filter(Boolean)
+    ));
+    if (paymentIds.length === 0) {
+      setPaymentDetails({});
+      return;
+    }
+    const unavailable = (error = 'unavailable') => ({
+      status: '',
+      number: '',
+      loading: false,
+      error
+    });
+    setPaymentDetails((current) => {
+      const next = {};
+      paymentIds.forEach((paymentId) => {
+        next[paymentId] = current[paymentId] || {
+          status: '',
+          number: '',
+          loading: true,
+          error: ''
+        };
+      });
+      return next;
+    });
+    const entries = await Promise.all(paymentIds.map(async (paymentId) => {
+      try {
+        const result = await api(paymentDetailEndpoint(paymentId));
+        if (!result.response.ok) {
+          return [paymentId, unavailable(
+            result.response.status === 404 ? 'not-found' : 'unavailable'
+          )];
+        }
+        const payment = normalizePaymentDetail(result.body);
+        if (!payment) return [paymentId, unavailable()];
+        return [paymentId, {
+          status: payment.status,
+          number: payment.paymentNumber,
+          loading: false,
+          error: ''
+        }];
+      } catch {
+        return [paymentId, unavailable()];
+      }
+    }));
+    if (paymentDetailsRequestRef.current !== requestId) return;
+    if (billingRequestRef.current !== billingRequestId) return;
+    setPaymentDetails(Object.fromEntries(entries));
+  }
+
   function clearBilling() {
     billingRequestRef.current += 1;
+    paymentDetailsRequestRef.current += 1;
     setBilling(emptyBillingState());
+    setPaymentDetails({});
   }
 
   /**
@@ -2562,6 +2644,10 @@ export default function App() {
     ? policies.filter((policy) => [policy.policyNumber, policy.productCode, policy.status]
       .some((value) => String(value || '').toLowerCase().includes(normalizedQueueFilter)))
     : policies;
+  const billingPaymentReviewCount = countInstallmentsNeedingPaymentReview(
+    billing.installments,
+    paymentDetails
+  );
 
   return (
     <main>
@@ -4872,6 +4958,22 @@ export default function App() {
                         </div>
                       </div>
 
+                      {billingPaymentReviewCount > 0 && (
+                        <p
+                          className="eia-billing-payment-review-summary"
+                          role="note"
+                          data-testid="billing-payment-review-summary"
+                        >
+                          <b>
+                            {billingPaymentReviewCount} installment
+                            {billingPaymentReviewCount === 1 ? '' : 's'}
+                          </b>{' '}
+                          reference{billingPaymentReviewCount === 1 ? 's' : ''} a payment that is
+                          no longer PAID. The installment status is unchanged; review the linked
+                          Payment record.
+                        </p>
+                      )}
+
                       <div className="eia-section-title">
                         <h2>Installments</h2>
                         <span className="eia-muted">
@@ -4900,8 +5002,16 @@ export default function App() {
                           <tbody>
                             {billing.installments.map((installment) => {
                               const overdue = isOverdue(installment.status);
+                              const paymentDetail = installment.paymentId
+                                ? paymentDetails[installment.paymentId]
+                                : null;
+                              const linkedPaymentStatus = paymentDetail?.status || '';
+                              const reviewLinkedPayment = paymentStatusNeedsReview(
+                                linkedPaymentStatus
+                              );
                               const linkedPaymentNumber = installment.paymentNumber
                                 || linkedPayments[installment.id]?.number
+                                || paymentDetail?.number
                                 || '';
                               return (
                                 <tr
@@ -4943,6 +5053,39 @@ export default function App() {
                                     {overdue && (
                                       <span className="eia-billing-overdue-flag">Past due</span>
                                     )}
+                                    {reviewLinkedPayment ? (
+                                      <span className="eia-billing-payment-review">
+                                        <span
+                                          className="eia-billing-payment-review-badge"
+                                          role="note"
+                                          data-testid={`payment-review-warning-${installment.id}`}
+                                        >
+                                          {paymentReviewWarning(linkedPaymentStatus)}
+                                        </span>
+                                        <CrossLink
+                                          className="eia-billing-payment-record-link"
+                                          href={paymentRecordHref(installment.paymentId)}
+                                          title={`Open the ${linkedPaymentStatus} Payment record`}
+                                          data-testid={`payment-record-link-${installment.id}`}
+                                        >
+                                          Payment record
+                                        </CrossLink>
+                                      </span>
+                                    ) : linkedPaymentStatus ? (
+                                      <span
+                                        className="eia-billing-payment-status"
+                                        data-testid={`payment-status-${installment.id}`}
+                                      >
+                                        Payment status: {linkedPaymentStatus}
+                                      </span>
+                                    ) : paymentDetail?.error ? (
+                                      <span
+                                        className="eia-billing-payment-status"
+                                        data-testid={`payment-status-unavailable-${installment.id}`}
+                                      >
+                                        Payment status unavailable
+                                      </span>
+                                    ) : null}
                                   </td>
                                   <td>
                                     {installment.paidDate || installment.paymentId || linkedPaymentNumber ? (
@@ -5933,6 +6076,11 @@ function BillingContextPanel() {
         <b>Applying an existing payment marks the installment collected.</b> The installment stores
         the payment id as collection evidence; the Payment keeps its own status, amount, currency,
         and approval path. Amounts may differ and both are shown for reconciliation.
+      </p>
+      <p>
+        <b>A linked Payment keeps its own status.</b> When that status is no longer PAID, the
+        installment is flagged for review with a link to the Payment record. Policy shows the
+        warning and never changes the installment status automatically.
       </p>
       <p>
         <b>A billing plan does not change policy coverage.</b> Coverage, limits, premium, and the

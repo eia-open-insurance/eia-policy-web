@@ -7,8 +7,10 @@ const INSURED_PARTY_ID = 'bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb';
 const PLAN_ID = 'cccccccc-cccc-7ccc-8ccc-cccccccccccc';
 const PAYMENT_ID = 'dddddddd-dddd-7ddd-8ddd-dddddddddddd';
 const PAYMENT_ID_2 = 'eeeeeeee-eeee-7eee-8eee-eeeeeeeeeeee';
+const PAYMENT_ID_3 = 'ffffffff-ffff-7fff-8fff-ffffffffffff';
 const PAYMENT_NUMBER = 'PAY-2026-0000001';
 const PAYMENT_NUMBER_2 = 'PAY-2026-0000002';
+const PAYMENT_NUMBER_3 = 'PAY-2026-0000003';
 
 const POLICY = {
   id: POLICY_ID,
@@ -152,6 +154,7 @@ async function installMocks(page, options = {}) {
     planPosts: [],
     patches: [],
     paymentGets: [],
+    paymentDetailGets: [],
     billingGets: 0,
     postStatus: options.postStatus || 201,
     postError: options.postError || null,
@@ -159,7 +162,10 @@ async function installMocks(page, options = {}) {
     patchError: options.patchError || null,
     getStatus: options.getStatus || 200,
     paymentListStatus: options.paymentListStatus || 200,
-    paymentListError: options.paymentListError || null
+    paymentListError: options.paymentListError || null,
+    paymentDetailStatus: options.paymentDetailStatus || 200,
+    paymentDetailError: options.paymentDetailError || null,
+    paymentDetails: { ...(options.paymentDetails || {}) }
   };
 
   await page.route('**/api/v1/policies**', async (route) => {
@@ -279,23 +285,48 @@ async function installMocks(page, options = {}) {
   await page.route('**/api/v1/payments**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (request.method() !== 'GET' || url.pathname !== '/api/v1/payments') {
+    if (request.method() !== 'GET') {
       await route.fulfill({ status: 404, body: `unexpected route ${request.method()} ${url.pathname}` });
       return;
     }
-    state.paymentGets.push({
-      headers: request.headers(),
-      query: Object.fromEntries(url.searchParams)
-    });
-    if (state.paymentListStatus >= 400) {
-      await json(route, state.paymentListStatus, state.paymentListError || problem(
-        state.paymentListStatus,
-        'Policy payments are temporarily unavailable.',
-        'PAYMENTS_UNAVAILABLE'
+    if (url.pathname === '/api/v1/payments') {
+      state.paymentGets.push({
+        headers: request.headers(),
+        query: Object.fromEntries(url.searchParams)
+      });
+      if (state.paymentListStatus >= 400) {
+        await json(route, state.paymentListStatus, state.paymentListError || problem(
+          state.paymentListStatus,
+          'Policy payments are temporarily unavailable.',
+          'PAYMENTS_UNAVAILABLE'
+        ));
+        return;
+      }
+      await json(route, 200, { items: state.payments });
+      return;
+    }
+    const paymentId = decodeURIComponent(url.pathname.split('/').pop() || '');
+    state.paymentDetailGets.push({ headers: request.headers(), paymentId });
+    if (state.paymentDetailStatus >= 400) {
+      await json(route, state.paymentDetailStatus, state.paymentDetailError || problem(
+        state.paymentDetailStatus,
+        'The linked payment could not be read.',
+        'PAYMENT_UNAVAILABLE'
       ));
       return;
     }
-    await json(route, 200, { items: state.payments });
+    const payment = state.paymentDetails[paymentId]
+      || state.payments.find((row) => row.id === paymentId)
+      || null;
+    if (!payment) {
+      await json(route, 404, problem(
+        404,
+        `Payment ${paymentId} was not found.`,
+        'PAYMENT_NOT_FOUND'
+      ));
+      return;
+    }
+    await json(route, 200, payment);
   });
   await page.route('**/api/v1/documents**', async (route) => {
     await json(route, 200, { items: [] });
@@ -415,6 +446,134 @@ test('renders summary, paid reference, and overdue installments', async ({ page 
   await expect(page.getByTestId('create-payment-installment-2')).toBeVisible();
   await expect(page.getByTestId(/^create-payment-/)).toHaveCount(2);
   await expect(page.getByTestId(/^link-payment-/)).toHaveCount(2);
+});
+
+test('shows a linked PAID payment without a review warning', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: PLAN,
+    installments: [
+      installment(1, { status: 'PAID', paidDate: '2026-03-15', paymentId: PAYMENT_ID })
+    ],
+    payments: [policyPayment({ status: 'PAID' })]
+  });
+  await openBillingTab(page);
+
+  const row = page.getByTestId('installment-row-installment-1');
+  await expect(row.getByTestId('payment-status-installment-1'))
+    .toContainText('Payment status: PAID');
+  await expect(row.getByTestId('payment-review-warning-installment-1')).toHaveCount(0);
+  await expect(page.getByTestId('billing-payment-review-summary')).toHaveCount(0);
+  await expect(row.getByText('PAID', { exact: true })).toBeVisible();
+  await expect(row).toContainText(PAYMENT_ID);
+
+  expect(state.paymentDetailGets).toHaveLength(1);
+  expect(state.paymentDetailGets[0].paymentId).toBe(PAYMENT_ID);
+  expect(state.paymentDetailGets[0].headers['x-eia-tenant']).toBe(TENANT);
+  expect(state.patches).toHaveLength(0);
+});
+
+test('warns when a linked payment is REVERSED and keeps the installment unchanged', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: PLAN,
+    installments: [
+      installment(1, { status: 'PAID', paidDate: '2026-03-15', paymentId: PAYMENT_ID })
+    ],
+    payments: [policyPayment({ status: 'REVERSED' })]
+  });
+  await openBillingTab(page);
+
+  const warning = page.getByTestId('payment-review-warning-installment-1');
+  await expect(warning).toHaveText('Payment REVERSED — installment may need review');
+  await expect(page.getByTestId('payment-record-link-installment-1')).toBeVisible();
+  await expect(page.getByTestId('billing-payment-review-summary')).toContainText('1 installment');
+
+  const row = page.getByTestId('installment-row-installment-1');
+  await expect(row.getByText('PAID', { exact: true })).toBeVisible();
+  await expect(row).toContainText(PAYMENT_ID);
+  expect(state.patches).toHaveLength(0);
+});
+
+test('counts installments whose linked payment is no longer PAID', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: PLAN,
+    installments: [
+      installment(1, { status: 'PAID', paidDate: '2026-03-15', paymentId: PAYMENT_ID }),
+      installment(2, { status: 'PAID', paidDate: '2026-03-16', paymentId: PAYMENT_ID_2 }),
+      installment(3, { status: 'PAID', paidDate: '2026-03-17', paymentId: PAYMENT_ID_3 }),
+      installment(4)
+    ],
+    payments: [
+      policyPayment({ status: 'REVERSED' }),
+      policyPayment({
+        id: PAYMENT_ID_2,
+        paymentNumber: PAYMENT_NUMBER_2,
+        status: 'CANCELLED'
+      }),
+      policyPayment({
+        id: PAYMENT_ID_3,
+        paymentNumber: PAYMENT_NUMBER_3,
+        status: 'PAID'
+      })
+    ]
+  });
+  await openBillingTab(page);
+
+  const summary = page.getByTestId('billing-payment-review-summary');
+  await expect(summary).toContainText('2 installments');
+  await expect(summary).toContainText('no longer PAID');
+  await expect(page.getByTestId(/^payment-review-warning-/)).toHaveCount(2);
+  await expect(page.getByTestId('payment-review-warning-installment-1')).toContainText('REVERSED');
+  await expect(page.getByTestId('payment-review-warning-installment-2')).toContainText('CANCELLED');
+  await expect(page.getByTestId('payment-review-warning-installment-3')).toHaveCount(0);
+  await expect(page.getByTestId('payment-status-installment-3'))
+    .toContainText('Payment status: PAID');
+
+  expect(state.paymentDetailGets).toHaveLength(3);
+  expect(state.patches).toHaveLength(0);
+});
+
+test('contains a linked payment read failure without a warning', async ({ page }) => {
+  const state = await installMocks(page, {
+    plan: PLAN,
+    installments: [
+      installment(1, { status: 'PAID', paidDate: '2026-03-15', paymentId: PAYMENT_ID })
+    ],
+    paymentDetailStatus: 503
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-summary-total')).toHaveText('$120,000.00');
+  const row = page.getByTestId('installment-row-installment-1');
+  await expect(row.getByText('PAID', { exact: true })).toBeVisible();
+  await expect(row.getByTestId('payment-status-unavailable-installment-1'))
+    .toContainText('Payment status unavailable');
+  await expect(page.getByTestId('payment-review-warning-installment-1')).toHaveCount(0);
+  await expect(page.getByTestId('billing-payment-review-summary')).toHaveCount(0);
+  await expect(page.getByRole('tabpanel', { name: 'Billing' }).getByRole('alert'))
+    .toHaveCount(0);
+
+  expect(state.paymentDetailGets).toHaveLength(1);
+  expect(state.patches).toHaveLength(0);
+});
+
+test('links a review warning to the Payment record', async ({ page }) => {
+  await installMocks(page, {
+    plan: PLAN,
+    installments: [
+      installment(1, { status: 'PAID', paidDate: '2026-03-15', paymentId: PAYMENT_ID })
+    ],
+    payments: [policyPayment({ status: 'RETURNED' })]
+  });
+  await openBillingTab(page);
+
+  const link = page.getByTestId('payment-record-link-installment-1');
+  await expect(link).toHaveAttribute('href', `/payment?record=${PAYMENT_ID}`);
+  await expect(link).toHaveText('Payment record');
+  await link.click();
+  await expect(page).toHaveURL(new URL(
+    `/payment?record=${PAYMENT_ID}`,
+    'http://localhost:3002'
+  ).toString());
 });
 
 test('marks an installment paid and waives another with PATCH payloads', async ({ page }) => {
@@ -639,7 +798,7 @@ test('offers a Payment hand-off URL for collectible installments only', async ({
   });
   const paymentRequests = [];
   page.on('request', (request) => {
-    if (request.url().includes('/api/v1/payments')) {
+    if (new URL(request.url()).pathname === '/api/v1/payments') {
       paymentRequests.push({ method: request.method(), url: request.url() });
     }
   });

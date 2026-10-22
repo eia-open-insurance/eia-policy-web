@@ -82,6 +82,16 @@ import {
   triggerLabel,
   validateMassTortForm
 } from './massTort.js';
+import {
+  emptyPolicyNotificationsState,
+  formatNotificationTimestamp,
+  newestNotifications,
+  normalizePolicyNotifications,
+  notificationCount,
+  notificationRecordHref,
+  notificationStatusTone,
+  policyNotificationsEndpoint
+} from './notifications.js';
 import { partyEndpoint, partyRecordLabel } from './party.js';
 import {
   LEGAL_ENTITY_TYPES,
@@ -377,6 +387,8 @@ export default function App() {
   const relatedRequestRef = useRef(0);
   const [documents, setDocuments] = useState({ items: [], loading: false, error: '' });
   const documentsRequestRef = useRef(0);
+  const [notifications, setNotifications] = useState(emptyPolicyNotificationsState);
+  const notificationsRequestRef = useRef(0);
   const [activity, setActivity] = useState({ items: [], loading: false, error: '' });
   const activityRequestRef = useRef(0);
 
@@ -652,6 +664,7 @@ export default function App() {
       });
       loadRelated(policyId).catch(() => {});
       loadDocuments(policyId).catch(() => {});
+      loadNotifications(policyId).catch(() => {});
       loadActivity(policyId).catch(() => {});
       if (!options.keepTab) setTab('overview');
       await loadCurrentVersion(policyId);
@@ -772,6 +785,54 @@ export default function App() {
   function clearDocuments() {
     documentsRequestRef.current += 1;
     setDocuments({ items: [], loading: false, error: '' });
+  }
+
+  /**
+   * Notifications are delivery artifacts owned by the Notifications vertical.
+   * The Overview card reads them as read-only context; a failed lookup is
+   * contained in the card and never blocks the policy record or its tabs.
+   */
+  async function loadNotifications(policyId) {
+    const requestId = notificationsRequestRef.current + 1;
+    notificationsRequestRef.current = requestId;
+    if (!policyId) {
+      setNotifications(emptyPolicyNotificationsState());
+      return;
+    }
+    setNotifications({ items: [], count: 0, loading: true, error: '' });
+    try {
+      const result = await api(policyNotificationsEndpoint(policyId));
+      if (notificationsRequestRef.current !== requestId) return;
+      if (!result.response.ok) {
+        setNotifications({
+          items: [],
+          count: 0,
+          loading: false,
+          error: 'Related notifications are temporarily unavailable.'
+        });
+        return;
+      }
+      const items = normalizePolicyNotifications(result.body);
+      setNotifications({
+        items,
+        count: notificationCount(result.body, items),
+        loading: false,
+        error: ''
+      });
+    } catch {
+      if (notificationsRequestRef.current !== requestId) return;
+      setNotifications({
+        items: [],
+        count: 0,
+        loading: false,
+        error: 'Related notifications are temporarily unavailable.'
+      });
+    }
+  }
+
+  function clearNotifications() {
+    notificationsRequestRef.current += 1;
+    setNotifications(emptyPolicyNotificationsState());
   }
 
   /**
@@ -1407,6 +1468,7 @@ export default function App() {
     setPremiumAuditError('');
     clearRelated();
     clearDocuments();
+    clearNotifications();
     clearActivity();
     clearBilling();
     clearCancellations();
@@ -2866,6 +2928,7 @@ export default function App() {
     : billingVarianceActionValue === 'CREATE_CREDIT_NOTE'
       ? 'The plan schedules more than the policy premium. Credit the excess on the ledger.'
       : '';
+  const relatedNotifications = newestNotifications(notifications.items);
 
   return (
     <main>
@@ -3445,6 +3508,107 @@ export default function App() {
                             ))}
                           </tbody>
                         </table>
+                      </div>
+                    )}
+                  </section>
+
+                  <section
+                    className="eia-card"
+                    aria-label="Related notifications"
+                    data-testid="related-notifications"
+                    style={{ marginTop: 14 }}
+                  >
+                    <div className="eia-section-title" style={{ marginTop: 0 }}>
+                      <h3>Notifications</h3>
+                      <span className="eia-badge" data-testid="related-notifications-count">
+                        {notifications.loading
+                          ? '…'
+                          : `${notifications.count} ${notifications.count === 1 ? 'notification' : 'notifications'}`}
+                      </span>
+                    </div>
+                    <p className="eia-muted" style={{ margin: '4px 0 0' }}>
+                      Notifications are delivery artifacts, not business facts. This card lists
+                      only messages whose source is this policy; it never sends or changes one.
+                    </p>
+                    {notifications.loading ? (
+                      <p
+                        className="eia-muted"
+                        data-testid="related-notifications-loading"
+                        style={{ margin: '8px 0 0' }}
+                      >
+                        Loading notifications…
+                      </p>
+                    ) : notifications.error ? (
+                      <p
+                        className="eia-muted"
+                        data-testid="related-notifications-error"
+                        style={{ margin: '8px 0 0' }}
+                      >
+                        {notifications.error}
+                      </p>
+                    ) : relatedNotifications.length === 0 ? (
+                      <p
+                        className="eia-muted"
+                        data-testid="related-notifications-empty"
+                        style={{ margin: '8px 0 0' }}
+                      >
+                        No notifications reference this policy yet.
+                      </p>
+                    ) : (
+                      <div className="eia-table-wrap" style={{ marginTop: 10 }}>
+                        <table className="eia-table" aria-label="Related notifications">
+                          <thead>
+                            <tr>
+                              <th>Number</th>
+                              <th>Subject</th>
+                              <th>Status</th>
+                              <th>Created</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {relatedNotifications.map((notification) => (
+                              <tr
+                                key={notification.id}
+                                data-testid="related-notification-row"
+                              >
+                                <td>
+                                  <CrossLink
+                                    className="eia-mono"
+                                    href={notificationRecordHref(notification.id)}
+                                    title={`Open notification ${notification.notificationNumber}`}
+                                  >
+                                    {notification.notificationNumber}
+                                  </CrossLink>
+                                </td>
+                                <td>{notification.subject || '—'}</td>
+                                <td>
+                                  <span
+                                    className={`eia-pill ${notificationStatusTone(notification.status)}`}
+                                  >
+                                    {notification.status || '—'}
+                                  </span>
+                                </td>
+                                <td>
+                                  <time
+                                    dateTime={notification.createdAt || undefined}
+                                    title={notification.createdAt || undefined}
+                                  >
+                                    {formatNotificationTimestamp(notification.createdAt)}
+                                  </time>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {notifications.count > relatedNotifications.length && (
+                          <p
+                            className="eia-muted"
+                            data-testid="related-notifications-more"
+                            style={{ margin: '8px 0 0' }}
+                          >
+                            Showing the newest {relatedNotifications.length} of {notifications.count}.
+                          </p>
+                        )}
                       </div>
                     )}
                   </section>

@@ -8,6 +8,14 @@ detail with tabs for programs, legal entities, versions, coverages and limits,
 mass tort, endorsements, insureds and locations, billing,
 cancellation/reinstatement, and an event-derived activity timeline.
 
+The Overview also carries a read-only related-notifications card. It reads
+`GET /api/v1/notifications?sourceType=POLICY&sourceId=<policyId>` and shows the
+total related count plus the three newest notifications by `createdAt`
+(number, subject, status, created). Each number links to
+`/notifications?record=<id>`. The card owns its loading, empty, and unavailable
+states; a failed or missing Notifications service never blocks the policy record
+or another tab, and Policy never sends or changes a notification.
+
 The Program tab sits after Overview. The current assignment is read from the
 policy record's `programId`, then `GET /api/v1/programs/{programId}` fills the
 card with the program number, name, type, effective dates, status, lead policy,

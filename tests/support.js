@@ -29,13 +29,21 @@ export async function fulfillJson(route, status, body, headers = {}) {
   });
 }
 
-/** Keeps policy selection independent from the claims/cessions domains in every spec. */
+/**
+ * Keeps policy selection independent from the claims/cessions domains in every
+ * spec. The notification preview is another read-only lookup triggered by
+ * selection, so it defaults to an empty page here; a spec that exercises the
+ * card registers its own route afterwards (the last registered route wins).
+ */
 export async function mockRelated(page, { claims = [], cessions = [] } = {}) {
   await page.route('**/api/v1/claims/search**', async (route) => {
     await fulfillJson(route, 200, { query: '', limit: 5, items: claims });
   });
   await page.route('**/api/v1/cessions/search**', async (route) => {
     await fulfillJson(route, 200, { query: '', limit: 5, items: cessions });
+  });
+  await page.route('**/api/v1/notifications**', async (route) => {
+    await fulfillJson(route, 200, { items: [], page: 0, size: 20, total: 0 });
   });
 }
 

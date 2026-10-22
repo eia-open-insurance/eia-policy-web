@@ -26,8 +26,12 @@ version is shown as a problem alert and the list is reloaded.
 
 Opening a policy shows a record detail with tabs:
 
-- **Overview** — policy terms, ETag, and the derived current version with its
-  hash-verified flag.
+- **Overview** — policy terms, ETag, the derived current version with its
+  hash-verified flag, and a read-only related-notifications card. The card reads
+  `GET /api/v1/notifications?sourceType=POLICY&sourceId=<policyId>`, shows the
+  total related count plus the three newest notifications (number, subject,
+  status, created), and links each number to `/notifications?record=<id>`.
+  Empty and unavailable states stay inside the card.
 - **Program** — the policy's administrative program assignment. The current
   assignment is read from the policy record and the program card shows its
   number, name, type, effective dates, status, and a link to the lead policy.

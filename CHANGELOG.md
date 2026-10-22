@@ -182,6 +182,17 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   reloaded. Playwright coverage for the adjustment payload and plan/policy
   reload, contained 422 and 409 handling, the credit-note prefill and POST, and
   the zero-variance no-action state.
+- Overview related-notifications card: reads
+  `GET /api/v1/notifications?sourceType=POLICY&sourceId=<policyId>` and shows the
+  total related count with the three newest notifications (number, subject,
+  status, created). Each notification number links to
+  `/notifications?record=<id>`; a policy with no notifications shows an empty
+  state, and an unavailable Notifications service stays inside the card without
+  blocking the policy record.
+- Playwright coverage for the related-notification count and newest-first
+  preview, the `sourceType`/`sourceId` query and tenant header, per-record
+  reload, the notification record link, the empty state, and a contained read
+  failure.
 
 ### Changed
 

@@ -745,6 +745,18 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
                       </CrossLink>
                     ) : '—'}
                   </p>
+                  {selected.policyId ? (
+                    <p className="eia-record-subtitle">
+                      Policy{' '}
+                      <CrossLink
+                        href={`/policy?record=${selected.policyId}`}
+                        title={`Open created policy ${selected.policyId}`}
+                        data-testid="submission-detail-policy-link"
+                      >
+                        Open created policy
+                      </CrossLink>
+                    </p>
+                  ) : null}
                 </div>
                 <div className="eia-actions">
                   <button

@@ -62,6 +62,15 @@ export function submissionReferralDecisionEndpoint(submissionId) {
   return `${submissionReferralEndpoint(submissionId)}/decision`;
 }
 
+/**
+ * The append-only referral rounds recorded for one submission. The submission
+ * detail carries only the current referral, so the history is a separate read
+ * that the panel loads alongside the detail and re-reads after a command.
+ */
+export function submissionReferralsEndpoint(submissionId) {
+  return `${LIST_PATH}/${encodeURIComponent(submissionId)}/referrals`;
+}
+
 export function referralStatusLabel(status) {
   const normalized = String(status || '').trim().toUpperCase();
   return REFERRAL_STATUS_LABELS[normalized] || normalized || '—';
@@ -215,16 +224,26 @@ export function normalizeReferral(raw) {
 
   const decidedAt = textValue(
     source.decidedAt,
+    source.decided_at,
     source.referralDecidedAt,
+    source.referral_decided_at,
     source.decisionAt,
     source.approvedAt,
     source.resolvedAt
   );
   const referredAt = textValue(
     source.referredAt,
+    source.referred_at,
     source.openedAt,
     source.requestedAt,
-    source.createdAt
+    source.createdAt,
+    source.created_at
+  );
+  const createdAt = textValue(
+    source.createdAt,
+    source.created_at,
+    source.referralCreatedAt,
+    referredAt
   );
   const at = textValue(
     source.at,
@@ -232,13 +251,14 @@ export function normalizeReferral(raw) {
     decidedAt,
     referredAt,
     source.updatedAt,
-    source.createdAt
+    createdAt
   );
 
   const referral = {
-    referralId: textValue(source.referralId, source.id),
+    referralId: textValue(source.referralId, source.referral_id, source.id),
     status: textValue(
       source.referralDecision,
+      source.referral_decision,
       source.status,
       source.referralStatus,
       source.state,
@@ -246,30 +266,56 @@ export function normalizeReferral(raw) {
     )
       .trim()
       .toUpperCase(),
-    reason: textValue(source.reason, source.referralReason, source.reasonCode)
+    reason: textValue(
+      source.reason,
+      source.referralReason,
+      source.referral_reason,
+      source.reasonCode,
+      source.reason_code
+    )
       .trim()
       .toUpperCase(),
-    authority: textValue(source.authority, source.referralAuthority, source.authorityLevel),
+    authority: textValue(
+      source.authority,
+      source.referralAuthority,
+      source.referral_authority,
+      source.authorityLevel,
+      source.authority_level
+    ),
     referredTo: textValue(
       source.referredTo,
+      source.referred_to,
       source.referredToId,
+      source.referred_to_id,
       source.referredToPersonId,
+      source.referred_to_person_id,
       source.assigneeId,
+      source.assignee_id,
       source.assigneePersonId
     ),
-    notes: textValue(source.notes, source.referralNotes, source.note),
+    notes: textValue(
+      source.notes,
+      source.referralNotes,
+      source.referral_notes,
+      source.note
+    ),
     decidedBy: textValue(
       source.decidedBy,
+      source.decided_by,
       source.referralDecidedBy,
+      source.referral_decided_by,
       source.decidedById,
+      source.decided_by_id,
       source.decidedByPersonId,
+      source.decided_by_person_id,
       source.decisionBy,
       source.approverId,
       source.approvedBy
     ),
     at,
     referredAt,
-    decidedAt
+    decidedAt,
+    createdAt
   };
 
   const hasContent = Boolean(
@@ -303,6 +349,57 @@ export function referralFromSubmission(raw) {
     'referralDecidedBy'
   ].some((field) => record[field] !== undefined && record[field] !== null);
   return hasFlatFields ? normalizeReferral(record) : null;
+}
+
+/**
+ * The history read may answer with a bare array or an items/referrals/data
+ * envelope, the same tolerance the queue applies to its page body. A nested
+ * `items` member inside the envelope is accepted too so a future page object
+ * does not force a second normalization path.
+ */
+function referralHistoryRows(body) {
+  if (Array.isArray(body)) return body;
+  const record = objectValue(body);
+  for (const key of ['items', 'referrals', 'data', 'content', 'results']) {
+    const value = record[key];
+    if (Array.isArray(value)) return value;
+    const nested = objectValue(value);
+    if (Array.isArray(nested.items)) return nested.items;
+  }
+  return [];
+}
+
+function referralHistoryMillis(referral) {
+  const parsed = Date.parse(
+    referral?.createdAt || referral?.referredAt || referral?.at || ''
+  );
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * The domain read is newest-first. The same order is applied here so the table
+ * is deterministic even if a projection or a test fixture returns the rounds
+ * out of order; the referral id is the tie breaker for a shared timestamp.
+ */
+export function sortReferralHistory(items) {
+  return [...items].sort((left, right) => {
+    const timeDiff = referralHistoryMillis(right) - referralHistoryMillis(left);
+    if (timeDiff !== 0) return timeDiff;
+    return String(left?.referralId || '').localeCompare(String(right?.referralId || ''));
+  });
+}
+
+/**
+ * Normalizes the append-only referral history behind the current referral on
+ * the submission detail. Each round carries the referral reason, authority,
+ * assigned person, decision, decider, timestamp, and notes; a pending round
+ * simply has no decider or decided-at yet.
+ */
+export function normalizeReferralHistory(body) {
+  const rows = referralHistoryRows(body)
+    .map((raw) => normalizeReferral(raw))
+    .filter(Boolean);
+  return sortReferralHistory(rows);
 }
 
 /**

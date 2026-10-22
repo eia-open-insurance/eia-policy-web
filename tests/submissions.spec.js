@@ -130,6 +130,9 @@ async function installApi(page, state) {
     const statusMatch = url.pathname.match(
       /^\/api\/v1\/policies\/submissions\/([^/]+)\/status$/
     );
+    const referralsMatch = url.pathname.match(
+      /^\/api\/v1\/policies\/submissions\/([^/]+)\/referrals$/
+    );
     const detailMatch = url.pathname.match(/^\/api\/v1\/policies\/submissions\/([^/]+)$/);
 
     if (method === 'GET' && url.pathname === LIST_PATH) {
@@ -140,6 +143,13 @@ async function installApi(page, state) {
         return;
       }
       await json(route, 200, envelope(state.items));
+      return;
+    }
+
+    // The referral history is a separate read that travels with the detail;
+    // this spec does not exercise it, so it answers empty.
+    if (method === 'GET' && referralsMatch) {
+      await json(route, 200, { items: [], page: 0, size: 0, total: 0 });
       return;
     }
 

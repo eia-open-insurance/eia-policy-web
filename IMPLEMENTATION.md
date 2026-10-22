@@ -124,6 +124,21 @@ decision). A 400/409 stays in the dialog; a 409 re-reads the submission and
 queue so the panel reflects the referral the domain actually holds. A pending
 referral never offers `Refer` again, and an approved referral is not reopened.
 
+The Referral card also renders the append-only referral history from
+`GET /api/v1/policies/submissions/{submissionId}/referrals`. The read travels
+with every submission detail read, so the table is populated when a submission
+is selected and re-read after a refer or decision command and after a detail
+refresh. Rows are normalized tolerantly (a bare array or an
+`items`/`referrals` envelope, and camel-case or snake-case member spellings)
+and ordered newest round first by the referral `createdAt`, with the referral
+id as the tie breaker. Each row shows the reason, authority, referred-to
+person, decision, deciding person, referral timestamp, and notes; person ids
+resolve through the same directory cache as the current-referral fields. An
+empty history states that no round has been recorded, and a history read
+failure is contained inside the card with its problem detail and a Retry
+action, leaving the submission detail, the current referral, and the actions
+unaffected.
+
 The directory is platform master data read from `GET /api/v1/directory`
 without the `X-EIA-Tenant` header, cached in memory for the tab. It loads when
 a referral picker opens or when the selected referral carries person ids, and

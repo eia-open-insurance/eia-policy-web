@@ -1621,6 +1621,56 @@ a.eia-btn-secondary.eia-billing-payment-link {
   font-size: 11px;
   line-height: 1.5;
 }
+.eia-submission-referral-history {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--eia-line);
+}
+.eia-submission-referral-history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.eia-submission-referral-history-head h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.eia-submission-referral-history-lede {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.eia-submission-referral-history-status {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px dashed #dce7f0;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.eia-submission-referral-history-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #eccaca;
+  border-radius: 6px;
+  background: #fdf6f6;
+  color: #8a2f2f;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.eia-submission-referral-history-table { font-size: 11px; }
+.eia-submission-referral-history-table th { white-space: nowrap; }
+.eia-submission-referral-history-table td { vertical-align: top; }
+.eia-submission-referral-history-time { white-space: nowrap; }
+.eia-submission-referral-history-notes {
+  min-width: 180px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
 .eia-submission-referral-modal { width: min(680px, 100%); }
 .eia-submission-referral-modal .eia-field { margin-top: 14px; }
 .eia-submission-referral-modal .eia-modal-actions { margin-top: 14px; }

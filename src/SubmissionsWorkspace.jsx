@@ -17,6 +17,7 @@ import {
   REFERRAL_REASONS,
   defaultReferralDecisionForm,
   defaultReferralForm,
+  normalizeReferralHistory,
   normalizeReferralResult,
   referralDecisionLabel,
   referralDecisionPayload,
@@ -28,6 +29,7 @@ import {
   mergeReferral,
   submissionReferralDecisionEndpoint,
   submissionReferralEndpoint,
+  submissionReferralsEndpoint,
   validateReferralDecisionForm,
   validateReferralForm
 } from './referral.js';
@@ -160,8 +162,12 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
   const [decisionForm, setDecisionForm] = useState(() => defaultReferralDecisionForm());
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionError, setDecisionError] = useState('');
+  const [referralHistory, setReferralHistory] = useState([]);
+  const [referralHistoryLoading, setReferralHistoryLoading] = useState(false);
+  const [referralHistoryError, setReferralHistoryError] = useState('');
   const listRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
+  const referralHistoryRequestRef = useRef(0);
   const labelRequestsRef = useRef(new Set());
 
   async function loadSubmissions(pageToLoad = 0, options = {}) {
@@ -201,8 +207,50 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
     }
   }
 
+  /**
+   * The submission detail carries only the current referral, so the history is
+   * a separate read. It travels with every detail read (initial selection,
+   * detail refresh, and the re-read after a refer/decision) and is contained:
+   * a failed history read reports inside the history area and never blocks the
+   * detail, its actions, or the queue.
+   */
+  async function loadReferralHistory(submissionId, options = {}) {
+    if (!submissionId) return false;
+    const requestId = referralHistoryRequestRef.current + 1;
+    referralHistoryRequestRef.current = requestId;
+    if (!options.quiet) setReferralHistoryLoading(true);
+    setReferralHistoryError('');
+    try {
+      const result = await api(submissionReferralsEndpoint(submissionId));
+      if (requestId !== referralHistoryRequestRef.current) return false;
+      if (!result.response.ok) {
+        setReferralHistoryError(
+          problemMessage(
+            result.body,
+            `Referral history is unavailable: ${result.response.status}`
+          )
+        );
+        return false;
+      }
+      setReferralHistory(normalizeReferralHistory(result.body));
+      return true;
+    } catch (e) {
+      if (requestId === referralHistoryRequestRef.current) {
+        setReferralHistoryError(
+          e.message || 'Referral history is temporarily unavailable.'
+        );
+      }
+      return false;
+    } finally {
+      if (requestId === referralHistoryRequestRef.current) {
+        setReferralHistoryLoading(false);
+      }
+    }
+  }
+
   async function loadSubmissionDetail(submissionId, options = {}) {
     if (!submissionId) return false;
+    loadReferralHistory(submissionId, { quiet: options.quiet }).catch(() => {});
     const requestId = detailRequestRef.current + 1;
     detailRequestRef.current = requestId;
     if (!options.quiet) setDetailLoading(true);
@@ -280,6 +328,10 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
 
   const referralReferredTo = selected?.referral?.referredTo || '';
   const referralDecidedBy = selected?.referral?.decidedBy || '';
+  const referralHistoryPeople = referralHistory
+    .flatMap((entry) => [entry?.referredTo, entry?.decidedBy])
+    .filter(Boolean)
+    .join('|');
 
   /**
    * A recorded referral names directory people by id. Resolve the directory
@@ -288,7 +340,7 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
    * panel falls back to the id and a dialog read retries.
    */
   useEffect(() => {
-    if (!referralReferredTo && !referralDecidedBy) return;
+    if (!referralReferredTo && !referralDecidedBy && !referralHistoryPeople) return;
     const cached = getCachedDirectory();
     if (cached) {
       setDirectory(cached);
@@ -296,7 +348,7 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
       return;
     }
     ensureDirectory().catch(() => {});
-  }, [referralReferredTo, referralDecidedBy]);
+  }, [referralReferredTo, referralDecidedBy, referralHistoryPeople]);
 
   const visibleSubmissions = items.filter((item) => (
     submissionMatchesFilters(item, { query, status: statusFilter }, applicantLabels)
@@ -331,9 +383,13 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
 
   function closeSelected() {
     detailRequestRef.current += 1;
+    referralHistoryRequestRef.current += 1;
     setSelected(null);
     setDetailError('');
     setDetailLoading(false);
+    setReferralHistory([]);
+    setReferralHistoryLoading(false);
+    setReferralHistoryError('');
     setConvertOpen(false);
     setConvertError('');
     setReferralOpen(false);
@@ -632,7 +688,14 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
         ? `Idempotent replay: returned ${reference}. No policy was created.`
         : `Created ${reference}. No policy was created; submissions precede policies.`);
       await loadSubmissions(0, { quiet: true });
-      if (created?.submissionId) setSelected(created);
+      if (created?.submissionId) {
+        // A new submission has no referral rounds yet, but the panel must not
+        // keep the history of the previously selected submission.
+        setReferralHistory([]);
+        setReferralHistoryError('');
+        setSelected(created);
+        loadReferralHistory(created.submissionId, { quiet: true }).catch(() => {});
+      }
     } catch (e) {
       setFormError(e.message);
     } finally {
@@ -1328,6 +1391,127 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
                       : 'Referral is available only while the submission is RECEIVED or REFERRED.'}
                   </p>
                 )}
+
+                <div
+                  className="eia-submission-referral-history"
+                  data-testid="referral-history"
+                >
+                  <div className="eia-submission-referral-history-head">
+                    <h4>Referral history</h4>
+                    <span className="eia-muted" data-testid="referral-history-count">
+                      {referralHistoryLoading
+                        ? '…'
+                        : `${referralHistory.length} `
+                          + `${referralHistory.length === 1 ? 'round' : 'rounds'}`}
+                    </span>
+                  </div>
+                  <p className="eia-muted eia-submission-referral-history-lede">
+                    Every referral round is kept append-only. Opening a referral adds a round;
+                    its decision updates the pending round with the decider and timestamp.
+                  </p>
+
+                  {referralHistoryError ? (
+                    <div
+                      className="eia-submission-referral-history-error"
+                      role="alert"
+                      data-testid="referral-history-error"
+                    >
+                      <span>{referralHistoryError}</span>
+                      <button
+                        type="button"
+                        className="eia-btn-secondary"
+                        data-testid="referral-history-retry"
+                        onClick={() => {
+                          if (selected?.submissionId) {
+                            loadReferralHistory(selected.submissionId).catch(() => {});
+                          }
+                        }}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : referralHistoryLoading ? (
+                    <p
+                      className="eia-muted eia-submission-referral-history-status"
+                      data-testid="referral-history-loading"
+                    >
+                      Loading referral history…
+                    </p>
+                  ) : referralHistory.length === 0 ? (
+                    <p
+                      className="eia-muted eia-submission-referral-history-status"
+                      data-testid="referral-history-empty"
+                    >
+                      No referral history has been recorded for this submission.
+                    </p>
+                  ) : (
+                    <div className="eia-table-wrap" style={{ marginTop: 10 }}>
+                      <table
+                        className="eia-table eia-submission-referral-history-table"
+                        aria-label="Referral history"
+                        data-testid="referral-history-table"
+                      >
+                        <thead>
+                          <tr>
+                            <th>Reason</th>
+                            <th>Authority</th>
+                            <th>Referred to</th>
+                            <th>Decision</th>
+                            <th>Decided by</th>
+                            <th>At</th>
+                            <th>Notes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {referralHistory.map((entry, index) => (
+                            <tr
+                              key={entry.referralId || `referral-history-${index}`}
+                              data-testid="referral-history-row"
+                            >
+                              <td data-testid="referral-history-reason">
+                                {entry.reason
+                                  ? `${referralReasonLabel(entry.reason)} (${entry.reason})`
+                                  : '—'}
+                              </td>
+                              <td data-testid="referral-history-authority">
+                                {entry.authority || '—'}
+                              </td>
+                              <td
+                                data-testid="referral-history-referred-to"
+                                title={entry.referredTo}
+                              >
+                                {personDisplay(entry.referredTo)}
+                              </td>
+                              <td data-testid="referral-history-decision">
+                                <span className={`eia-pill ${referralStatusTone(entry.status)}`}>
+                                  {entry.status || '—'}
+                                </span>
+                              </td>
+                              <td
+                                data-testid="referral-history-decided-by"
+                                title={entry.decidedBy}
+                              >
+                                {personDisplay(entry.decidedBy)}
+                              </td>
+                              <td
+                                className="eia-submission-referral-history-time"
+                                data-testid="referral-history-at"
+                              >
+                                {formatTimestamp(entry.at)}
+                              </td>
+                              <td
+                                className="eia-submission-referral-history-notes"
+                                data-testid="referral-history-notes"
+                              >
+                                {entry.notes || '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               </section>
 
               <section

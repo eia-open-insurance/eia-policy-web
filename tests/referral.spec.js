@@ -94,6 +94,41 @@ function approvedReferral(overrides = {}) {
   });
 }
 
+/**
+ * One append-only referral round as the history read projects it. The current
+ * referral on the submission detail is a separate projection of the latest
+ * round; a decided round carries the decider and decided-at instant.
+ */
+function historyRow(overrides = {}) {
+  return {
+    referralId: REFERRAL_ID,
+    submissionId: SUBMISSION_ID,
+    reason: 'LIMIT',
+    authority: 'Chief Underwriting Officer',
+    referredTo: REFERRED_TO_ID,
+    notes: 'Limits exceed the treaty capacity.',
+    decision: 'PENDING',
+    decidedBy: null,
+    decidedAt: null,
+    createdAt: '2026-10-21T15:30:00Z',
+    ...overrides
+  };
+}
+
+function historyFromReferral(referral) {
+  return [historyRow({
+    referralId: referral.referralId || REFERRAL_ID,
+    reason: referral.reason,
+    authority: referral.authority,
+    referredTo: referral.referredTo,
+    notes: referral.notes,
+    decision: referral.status,
+    decidedBy: referral.decidedBy,
+    decidedAt: referral.decidedAt,
+    createdAt: referral.referredAt || referral.at
+  })];
+}
+
 function envelope(items) {
   return {
     items,
@@ -128,6 +163,10 @@ function createState(overrides = {}) {
     listReads: 0,
     listHeaders: [],
     detailReads: 0,
+    history: [],
+    historyReads: 0,
+    historyRequests: [],
+    historyFailure: null,
     referralPosts: [],
     decisionPosts: [],
     directoryGets: 0,
@@ -139,7 +178,12 @@ function createState(overrides = {}) {
 }
 
 function seededState(record, overrides = {}) {
-  return createState({ items: [record], current: record, ...overrides });
+  const history = overrides.history !== undefined
+    ? overrides.history
+    : record?.referral
+      ? historyFromReferral(record.referral)
+      : [];
+  return createState({ items: [record], current: record, history, ...overrides });
 }
 
 function currentRecord(state, id) {
@@ -174,6 +218,9 @@ async function installApi(page, state) {
     const referralMatch = url.pathname.match(
       /^\/api\/v1\/policies\/submissions\/([^/]+)\/referral$/
     );
+    const referralsMatch = url.pathname.match(
+      /^\/api\/v1\/policies\/submissions\/([^/]+)\/referrals$/
+    );
     const statusMatch = url.pathname.match(
       /^\/api\/v1\/policies\/submissions\/([^/]+)\/status$/
     );
@@ -183,6 +230,20 @@ async function installApi(page, state) {
       state.listReads += 1;
       state.listHeaders.push(route.request().headers());
       await json(route, 200, envelope(state.items));
+      return;
+    }
+
+    if (method === 'GET' && referralsMatch) {
+      state.historyReads += 1;
+      state.historyRequests.push({
+        path: url.pathname,
+        headers: route.request().headers()
+      });
+      if (state.historyFailure) {
+        await problem(route, state.historyFailure.status, state.historyFailure.body);
+        return;
+      }
+      await json(route, 200, envelope(state.history));
       return;
     }
 
@@ -215,6 +276,18 @@ async function installApi(page, state) {
       state.items = state.items.map((item) => (
         item.submissionId === id ? updated : item
       ));
+      state.history = [
+        historyRow({
+          referralId: '77777777-7777-7777-8777-777777777777',
+          reason: body.reason,
+          authority: body.authority,
+          referredTo: body.referredTo,
+          notes: body.notes || null,
+          decision: 'PENDING',
+          createdAt: '2026-10-22T12:00:00Z'
+        }),
+        ...state.history
+      ];
       await json(route, 200, updated, { ETag: `"${updated.version}"` });
       return;
     }
@@ -249,6 +322,20 @@ async function installApi(page, state) {
       state.items = state.items.map((item) => (
         item.submissionId === id ? updated : item
       ));
+      const pendingIndex = state.history.findIndex((entry) => entry.decision === 'PENDING');
+      if (pendingIndex >= 0) {
+        state.history = state.history.map((entry, index) => (
+          index === pendingIndex
+            ? {
+              ...entry,
+              decision: body.decision,
+              decidedBy: body.decidedBy,
+              notes: body.notes || entry.notes,
+              decidedAt: '2026-10-22T13:00:00Z'
+            }
+            : entry
+        ));
+      }
       await json(route, 200, updated, { ETag: `"${updated.version}"` });
       return;
     }
@@ -768,3 +855,207 @@ test('offers no referral action once the submission is quoted', async ({ page })
   await expect(page.getByTestId('submission-status')).toHaveText('QUOTED');
   await expect(state.directoryGets).toBe(0);
 });
+
+test('renders the referral history newest first with every recorded field', async ({ page }) => {
+  const oldest = historyRow({
+    referralId: '11111111-1111-7111-8111-111111111111',
+    reason: 'PREMIUM',
+    authority: 'Underwriting Committee',
+    notes: 'Declined by the underwriting committee.',
+    decision: 'DECLINED',
+    decidedBy: OTHER_PERSON_ID,
+    decidedAt: '2026-10-20T10:00:00Z',
+    createdAt: '2026-10-20T09:00:00Z'
+  });
+  const middle = historyRow({
+    referralId: '22222222-2222-7222-8222-222222222222',
+    createdAt: '2026-10-21T15:30:00Z'
+  });
+  const newest = historyRow({
+    referralId: REFERRAL_ID,
+    reason: 'TORT',
+    notes: 'Approved up to the treaty capacity.',
+    decision: 'APPROVED',
+    decidedBy: DECIDED_BY_ID,
+    decidedAt: '2026-10-22T15:00:00Z',
+    createdAt: '2026-10-22T14:00:00Z'
+  });
+  const referred = submission({ status: 'REFERRED', referral: approvedReferral() });
+  // The domain read is newest-first; the panel must keep that order even when a
+  // projection hands the rounds back in a different order.
+  const state = seededState(referred, { history: [middle, oldest, newest] });
+  await installApi(page, state);
+  await installDirectory(page, state);
+  await page.goto('/');
+  await openSubmissions(page);
+  await openFirstSubmission(page);
+
+  const panel = page.getByRole('region', { name: 'Submission referral' });
+  await expect(panel.getByTestId('referral-history-table')).toBeVisible();
+  const rows = panel.getByTestId('referral-history-row');
+  await expect(rows).toHaveCount(3);
+  await expect(panel.getByTestId('referral-history-count')).toHaveText('3 rounds');
+
+  await expect(rows.nth(0).getByTestId('referral-history-reason'))
+    .toHaveText('Tort or mass-tort exposure (TORT)');
+  await expect(rows.nth(0).getByTestId('referral-history-authority'))
+    .toHaveText('Chief Underwriting Officer');
+  await expect(rows.nth(0).getByTestId('referral-history-referred-to'))
+    .toHaveText('Riley Underwriter');
+  await expect(rows.nth(0).getByTestId('referral-history-decision')).toHaveText('APPROVED');
+  await expect(rows.nth(0).getByTestId('referral-history-decided-by'))
+    .toHaveText('Dana Manager');
+  await expect(rows.nth(0).getByTestId('referral-history-at')).not.toHaveText('—');
+  await expect(rows.nth(0).getByTestId('referral-history-notes'))
+    .toHaveText('Approved up to the treaty capacity.');
+
+  await expect(rows.nth(1).getByTestId('referral-history-decision')).toHaveText('PENDING');
+  await expect(rows.nth(1).getByTestId('referral-history-decided-by')).toHaveText('—');
+  await expect(rows.nth(1).getByTestId('referral-history-reason'))
+    .toHaveText('Limit exceeds authority (LIMIT)');
+
+  await expect(rows.nth(2).getByTestId('referral-history-reason'))
+    .toHaveText('Premium exceeds authority (PREMIUM)');
+  await expect(rows.nth(2).getByTestId('referral-history-authority'))
+    .toHaveText('Underwriting Committee');
+  await expect(rows.nth(2).getByTestId('referral-history-decision')).toHaveText('DECLINED');
+  await expect(rows.nth(2).getByTestId('referral-history-decided-by'))
+    .toHaveText('Alex Adjuster');
+  await expect(rows.nth(2).getByTestId('referral-history-notes'))
+    .toHaveText('Declined by the underwriting committee.');
+
+  // One read accompanies the detail read, scoped to the tenant and the route.
+  expect(state.historyReads).toBe(1);
+  expect(state.historyRequests).toHaveLength(1);
+  expect(state.historyRequests[0].path).toBe(`${LIST_PATH}/${SUBMISSION_ID}/referrals`);
+  expect(state.historyRequests[0].headers['x-eia-tenant']).toBe(TENANT);
+  expect(state.historyRequests[0].headers['idempotency-key']).toBeUndefined();
+});
+
+test('shows an empty referral history when no round has been recorded', async ({ page }) => {
+  const state = seededState(submission());
+  await installApi(page, state);
+  await installDirectory(page, state);
+  await page.goto('/');
+  await openSubmissions(page);
+  await openFirstSubmission(page);
+
+  const panel = page.getByRole('region', { name: 'Submission referral' });
+  await expect(panel.getByTestId('referral-history')).toBeVisible();
+  await expect(panel.getByTestId('referral-history-empty'))
+    .toContainText('No referral history has been recorded for this submission.');
+  await expect(panel.getByTestId('referral-history-table')).toHaveCount(0);
+  await expect(panel.getByTestId('referral-history-count')).toHaveText('0 rounds');
+  expect(state.historyReads).toBe(1);
+});
+
+test('keeps a referral history read failure inside the Referral card and retries', async ({ page }) => {
+  const referred = submission({ status: 'REFERRED', referral: pendingReferral() });
+  const state = seededState(referred, { history: [] });
+  state.historyFailure = {
+    status: 503,
+    body: {
+      status: 503,
+      title: 'Referral history unavailable',
+      detail: 'The referral history is temporarily unavailable.',
+      code: 'REFERRAL_HISTORY_UNAVAILABLE',
+      retryable: true
+    }
+  };
+  await installApi(page, state);
+  await installDirectory(page, state);
+  await page.goto('/');
+  await openSubmissions(page);
+  await openFirstSubmission(page);
+
+  const panel = page.getByRole('region', { name: 'Submission referral' });
+  // The detail, the current referral, and its actions are unaffected.
+  await expect(page.getByTestId('submission-status')).toHaveText('REFERRED');
+  await expect(panel.getByTestId('referral-status')).toHaveText('PENDING');
+  await expect(panel.getByTestId('referral-authority'))
+    .toHaveText('Chief Underwriting Officer');
+  await expect(panel.getByTestId('referral-approve')).toBeVisible();
+  await expect(panel.getByTestId('referral-history-error'))
+    .toContainText('The referral history is temporarily unavailable.');
+  await expect(panel.getByTestId('referral-history-table')).toHaveCount(0);
+  await expect(page.getByTestId('submission-load-error')).toHaveCount(0);
+
+  state.historyFailure = null;
+  state.history = [historyRow()];
+  await panel.getByTestId('referral-history-retry').click();
+  await expect(panel.getByTestId('referral-history-row')).toHaveCount(1);
+  await expect(panel.getByTestId('referral-history-error')).toHaveCount(0);
+  expect(state.historyReads).toBe(2);
+});
+
+test('refreshes the referral history after opening a referral', async ({ page }) => {
+  const state = seededState(submission());
+  await installApi(page, state);
+  await installDirectory(page, state);
+  await page.goto('/');
+  await openSubmissions(page);
+  await openFirstSubmission(page);
+
+  const panel = page.getByRole('region', { name: 'Submission referral' });
+  await expect(panel.getByTestId('referral-history-empty')).toBeVisible();
+
+  await page.getByTestId('submission-refer').click();
+  await fillReferralForm(page, {
+    reason: 'LIMIT',
+    authority: 'Chief Underwriting Officer',
+    notes: 'Limits exceed the treaty capacity; decision requested before quote.'
+  });
+  await page.getByTestId('submission-referral-dialog')
+    .getByRole('button', { name: 'Refer submission' })
+    .click();
+
+  await expect(page.getByTestId('submissions-notice'))
+    .toContainText('Referral opened for SUB-2026-0000001');
+  const rows = panel.getByTestId('referral-history-row');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().getByTestId('referral-history-reason'))
+    .toHaveText('Limit exceeds authority (LIMIT)');
+  await expect(rows.first().getByTestId('referral-history-authority'))
+    .toHaveText('Chief Underwriting Officer');
+  await expect(rows.first().getByTestId('referral-history-referred-to'))
+    .toHaveText('Riley Underwriter');
+  await expect(rows.first().getByTestId('referral-history-decision')).toHaveText('PENDING');
+  await expect(rows.first().getByTestId('referral-history-decided-by')).toHaveText('—');
+  await expect(rows.first().getByTestId('referral-history-at')).not.toHaveText('—');
+  await expect(rows.first().getByTestId('referral-history-notes'))
+    .toHaveText('Limits exceed the treaty capacity; decision requested before quote.');
+  expect(state.historyReads).toBe(2);
+});
+
+test('refreshes the referral history after a decision', async ({ page }) => {
+  const referred = submission({ status: 'REFERRED', referral: pendingReferral() });
+  const state = seededState(referred);
+  await installApi(page, state);
+  await installDirectory(page, state);
+  await page.goto('/');
+  await openSubmissions(page);
+  await openFirstSubmission(page);
+
+  const panel = page.getByRole('region', { name: 'Submission referral' });
+  const rows = panel.getByTestId('referral-history-row');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().getByTestId('referral-history-decision')).toHaveText('PENDING');
+
+  await panel.getByTestId('referral-approve').click();
+  const dialog = page.getByTestId('referral-decision-dialog');
+  await chooseDirectoryPerson(dialog, DECIDED_BY_ID, 'Dana');
+  await dialog.getByLabel('Notes (optional)').fill('Approved within treaty capacity.');
+  await dialog.getByTestId('referral-decision-submit').click();
+
+  await expect(page.getByTestId('submissions-notice'))
+    .toContainText('Referral approved for SUB-2026-0000001 by Dana Manager.');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().getByTestId('referral-history-decision')).toHaveText('APPROVED');
+  await expect(rows.first().getByTestId('referral-history-decided-by'))
+    .toHaveText('Dana Manager');
+  await expect(rows.first().getByTestId('referral-history-at')).not.toHaveText('—');
+  await expect(rows.first().getByTestId('referral-history-notes'))
+    .toHaveText('Approved within treaty capacity.');
+  expect(state.historyReads).toBe(2);
+});
+

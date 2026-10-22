@@ -1161,6 +1161,69 @@ a.eia-btn-secondary.eia-billing-payment-link {
 .eia-renew-action { display: inline-flex; }
 .eia-renew-action button:disabled { cursor: not-allowed; }
 
+/* Policy premium audit: re-rates written premium and issues a PREMIUM_AUDIT version. */
+.eia-premium-audit-entry {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+  border-left: 3px solid var(--eia-blue);
+}
+.eia-premium-audit-entry-copy { max-width: 680px; }
+.eia-premium-audit-entry-copy p { margin: 5px 0 0; font-size: 12px; line-height: 1.5; }
+.eia-premium-audit-unavailable { color: var(--eia-amber); }
+.eia-premium-audit-action { flex: 0 0 auto; display: inline-flex; }
+.eia-premium-audit-action button:disabled { cursor: not-allowed; }
+.eia-premium-audit-modal { width: min(720px, 100%); }
+.eia-field-label { font-size: 11px; color: var(--eia-muted); font-weight: 600; }
+.eia-premium-audit-current {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid #dce7f0;
+  border-radius: 6px;
+  background: #f7fafc;
+  color: var(--eia-navy);
+  font-size: 15px;
+  font-weight: 700;
+}
+.eia-premium-audit-delta {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid #dce7f0;
+  border-radius: 6px;
+  background: #f7fafc;
+  color: var(--eia-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+.eia-premium-audit-delta.increase {
+  border-color: #bfe0cd;
+  background: #f2fbf6;
+  color: var(--eia-green);
+}
+.eia-premium-audit-delta.decrease {
+  border-color: #e6bcbc;
+  background: #fff6f6;
+  color: var(--eia-red);
+}
+.eia-premium-audit-delta.flat {
+  border-color: #dce7f0;
+  background: #f7fafc;
+  color: var(--eia-muted);
+}
+.eia-premium-audit-delta.unknown { color: var(--eia-muted); font-weight: 500; }
+
+@media (max-width: 720px) {
+  .eia-premium-audit-entry { flex-direction: column; }
+  .eia-premium-audit-action { width: 100%; }
+  .eia-premium-audit-action button { width: 100%; }
+}
+
 .eia-modal-backdrop {
   position: fixed;
   inset: 0;

@@ -154,6 +154,19 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   retry or record selection; other reinstatement failures keep the page-level
   problem path. Playwright coverage for the guard, ledger link, retry, selection,
   and unchanged generic errors.
+- Endorsements-tab **Record premium audit** action with a modal for the current
+  premium, audited premium, live increase/decrease/no-change delta preview,
+  effective date, reason, and optional approver/approval reference. It is
+  available for `ISSUED`, `IN_FORCE`, `ENDORSED`, and `REINSTATED` policies and
+  disabled with the reason otherwise.
+  `POST /api/v1/policies/{policyId}/premium-audit` sends the selected ETag as
+  `If-Match` and a fresh `Idempotency-Key`; success re-reads the policy and
+  current version, updates the header premium/ETag, issues a `PREMIUM_AUDIT`
+  version, and announces the changed premium. The audit changes written premium
+  only, leaves coverage and limits untouched, and contains 400/409 problems in
+  the dialog. Playwright coverage for status eligibility, increase/decrease/
+  no-change previews and payloads, the refreshed policy/version, and 400/409
+  containment.
 
 ### Changed
 

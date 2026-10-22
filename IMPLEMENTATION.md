@@ -85,6 +85,25 @@ and the notice reads `Renewed as POL-…`. The successor shows
 predecessor payload does not identify its successor, so no forward link is
 rendered.
 
+Premium audit is an Endorsements-tab action available while the policy is
+`ISSUED`, `IN_FORCE`, `ENDORSED`, or `REINSTATED`; every other status renders it
+disabled with the reason in its tooltip and in the action card. The modal shows
+the current written premium, an audited premium defaulted to the current amount,
+a live increase/decrease/no-change delta preview, an effective date defaulted to
+today, a required reason, and optional approver and approval-reference fields.
+`POST /api/v1/policies/{policyId}/premium-audit` sends
+`{auditedPremium, effectiveDate, reason, approvedBy?, approvalRef?}` with the
+selected ETag as `If-Match` and a fresh `Idempotency-Key`. The command response
+may be the updated policy (with the advanced ETag) or an audit result carrying
+`auditedPremium` and `policyVersionNumber`; the client normalizes both and
+re-reads the policy detail and current version so the header premium, ETag,
+Overview current-version card, and Versions tab reflect the new `PREMIUM_AUDIT`
+version. The notice reads `Premium audit recorded: $old → $new` followed by the
+issued `PREMIUM_AUDIT` version. A 400 validation problem or a 409 conflict stays
+in the modal with its canonical problem and field errors, and the selected
+policy keeps its premium and ETag. The audit changes written premium only:
+coverage grants, limits, insureds, and locations stay as issued.
+
 Billing owns the premium collection plan only. `GET /billing` is treated as an
 empty state on 404; a plan is rendered as a summary (total premium, paid,
 credited, outstanding net of credits, overdue) and an installment table.

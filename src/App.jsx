@@ -119,6 +119,16 @@ import {
   validateProgramForm
 } from './programs.js';
 import {
+  defaultPremiumAuditForm,
+  isPremiumAuditable,
+  normalizePremiumAuditResult,
+  premiumAuditDelta,
+  premiumAuditDirection,
+  premiumAuditPayload,
+  premiumAuditUnavailableReason,
+  validatePremiumAuditForm
+} from './premiumAudit.js';
+import {
   addYears,
   defaultRenewalForm,
   isRenewable,
@@ -199,6 +209,13 @@ function formatPercent(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return String(value);
   return `${(numeric * 100).toFixed(2)}%`;
+}
+
+function premiumAuditPreviewLabel(direction, delta, currency) {
+  if (direction === 'INCREASE') return `Increase of ${formatMoney(Math.abs(delta), currency)}`;
+  if (direction === 'DECREASE') return `Decrease of ${formatMoney(Math.abs(delta), currency)}`;
+  if (direction === 'NO_CHANGE') return 'No change to written premium';
+  return 'Enter an audited premium to preview the change';
 }
 
 function formatEtag(version) {
@@ -420,6 +437,10 @@ export default function App() {
     paidAmount: '250000.00', reservedAmount: '50000.00', recoveredAmount: '0.00'
   });
   const [endorsementForm, setEndorsementForm] = useState(defaultEndorsementForm);
+  const [premiumAuditOpen, setPremiumAuditOpen] = useState(false);
+  const [premiumAuditForm, setPremiumAuditForm] = useState(() => defaultPremiumAuditForm(null));
+  const [premiumAuditBusy, setPremiumAuditBusy] = useState(false);
+  const [premiumAuditError, setPremiumAuditError] = useState('');
   const [insuredForm, setInsuredForm] = useState(() => defaultInsuredForm(null));
   const [locationForm, setLocationForm] = useState(() => defaultLocationForm(null));
   const [cancelForm, setCancelForm] = useState(defaultCancelForm);
@@ -641,6 +662,9 @@ export default function App() {
       clearCreditNotes();
       clearMassTort();
       setMassTortForm(defaultMassTortForm(null, detail.body));
+      setPremiumAuditOpen(false);
+      setPremiumAuditForm(defaultPremiumAuditForm(detail.body));
+      setPremiumAuditError('');
       clearProgram();
       clearLegalEntity();
       if (!options.keepTab) {
@@ -1367,6 +1391,9 @@ export default function App() {
     setRenewError('');
     setReinstateError(null);
     setRenewedFrom(null);
+    setPremiumAuditOpen(false);
+    setPremiumAuditForm(defaultPremiumAuditForm(null));
+    setPremiumAuditError('');
     clearRelated();
     clearDocuments();
     clearActivity();
@@ -1715,6 +1742,93 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [programCreateOpen, programSaving]);
+
+  // ---- premium audit ------------------------------------------------
+  function openPremiumAudit() {
+    if (!selectedPolicy || !isPremiumAuditable(selectedPolicy.status)) return;
+    setError('');
+    setNotice('');
+    setPremiumAuditError('');
+    setPremiumAuditForm(defaultPremiumAuditForm(selectedPolicy));
+    setPremiumAuditOpen(true);
+  }
+
+  function closePremiumAudit() {
+    if (premiumAuditBusy) return;
+    setPremiumAuditOpen(false);
+    setPremiumAuditError('');
+  }
+
+  function updatePremiumAudit(field, value) {
+    setPremiumAuditForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function submitPremiumAudit(event) {
+    event.preventDefault();
+    if (!selected || !selectedPolicy || !isPremiumAuditable(selectedPolicy.status)) return;
+    setPremiumAuditError('');
+    const validation = validatePremiumAuditForm(premiumAuditForm);
+    if (validation) {
+      setPremiumAuditError(validation);
+      return;
+    }
+    const beforePremium = selectedPolicy.premiumAmount;
+    const payload = premiumAuditPayload(premiumAuditForm);
+    setPremiumAuditBusy(true);
+    try {
+      const result = await api(`/api/v1/policies/${selected.id}/premium-audit`, {
+        method: 'POST',
+        body: payload,
+        etag: selected.etag,
+        idempotencyKey: newIdempotencyKey()
+      });
+      if (!result.response.ok) {
+        // A 400 validation problem or a 409 stale-version/audit conflict stays
+        // in the dialog: the selected policy and the operator's values survive.
+        setPremiumAuditError(
+          problemMessage(result.body, `Premium audit failed: ${result.response.status}`)
+        );
+        return;
+      }
+      const normalized = normalizePremiumAuditResult(result.body);
+      const afterPremium = normalized.auditedPremium
+        || normalized.policy?.premiumAmount
+        || payload.auditedPremium;
+      const currency = normalized.policy?.premiumCurrency || selectedPolicy.premiumCurrency;
+      const versionText = normalized.versionLabel
+        ? `PREMIUM_AUDIT version ${normalized.versionLabel} issued.`
+        : 'PREMIUM_AUDIT version issued.';
+      setPremiumAuditOpen(false);
+      setPremiumAuditError('');
+      setPremiumAuditForm(defaultPremiumAuditForm(normalized.policy || selectedPolicy));
+      mutationSucceeded(
+        `Premium audit recorded: ${formatMoney(beforePremium, currency)} → ${formatMoney(afterPremium, currency)}. ${versionText}`,
+        result
+      );
+      // The command response is not the authoritative read model: re-read the
+      // detail for the advanced ETag and the current version for the
+      // PREMIUM_AUDIT timeline entry.
+      await refreshSelected(result.etag);
+      await loadCurrentVersion(selected.id);
+      await loadTabData('versions');
+    } catch (e) {
+      setPremiumAuditError(e.message);
+    } finally {
+      setPremiumAuditBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!premiumAuditOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !premiumAuditBusy) {
+        setPremiumAuditOpen(false);
+        setPremiumAuditError('');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [premiumAuditOpen, premiumAuditBusy]);
 
   // ---- billing plan -------------------------------------------------
   function updateBilling(field, value) {
@@ -2540,6 +2654,23 @@ export default function App() {
   const advanceTarget = selectedPolicy ? nextStatusFor(selectedPolicy.status) : null;
   const renewalAllowed = selectedPolicy ? isRenewable(selectedPolicy.status) : false;
   const renewalHint = selectedPolicy ? renewalUnavailableReason(selectedPolicy.status) : '';
+  const premiumAuditAllowed = selectedPolicy ? isPremiumAuditable(selectedPolicy.status) : false;
+  const premiumAuditHint = selectedPolicy ? premiumAuditUnavailableReason(selectedPolicy.status) : '';
+  const premiumAuditCurrency = selectedPolicy?.premiumCurrency || '';
+  const premiumAuditDeltaAmount = selectedPolicy
+    ? premiumAuditDelta(selectedPolicy, premiumAuditForm)
+    : null;
+  const premiumAuditChange = premiumAuditDirection(premiumAuditDeltaAmount);
+  const premiumAuditDeltaText = premiumAuditPreviewLabel(
+    premiumAuditChange,
+    premiumAuditDeltaAmount,
+    premiumAuditCurrency
+  );
+  const premiumAuditDeltaTone = premiumAuditChange === 'INCREASE'
+    ? 'increase'
+    : premiumAuditChange === 'DECREASE'
+      ? 'decrease'
+      : premiumAuditChange === 'NO_CHANGE' ? 'flat' : 'unknown';
   const renewedFromPolicyId = selectedPolicy?.renewedFromPolicyId || '';
   const renewedFromLabel = renewedFromPolicyId
     ? ((renewedFrom?.id === renewedFromPolicyId && renewedFrom.policyNumber)
@@ -4372,6 +4503,46 @@ export default function App() {
                   role="tabpanel"
                   aria-labelledby="tab-endorsements"
                 >
+                  <section className="eia-card eia-premium-audit-entry" aria-label="Premium audit">
+                    <div className="eia-premium-audit-entry-copy">
+                      <div className="eia-section-title" style={{ marginTop: 0 }}>
+                        <h3>Premium audit</h3>
+                        <span className="eia-badge">PREMIUM_AUDIT version</span>
+                      </div>
+                      <p className="eia-muted">
+                        Record the audited written premium. The audit changes the premium only and
+                        issues a PREMIUM_AUDIT version; coverage grants and limits stay as issued.
+                      </p>
+                      {!premiumAuditAllowed && (
+                        <p
+                          className="eia-muted eia-premium-audit-unavailable"
+                          data-testid="premium-audit-unavailable"
+                        >
+                          {premiumAuditHint}
+                        </p>
+                      )}
+                    </div>
+                    <span
+                      className="eia-premium-audit-action"
+                      title={premiumAuditAllowed
+                        ? 'Record the audited premium and issue a PREMIUM_AUDIT version'
+                        : premiumAuditHint}
+                    >
+                      <button
+                        type="button"
+                        className="eia-btn-secondary"
+                        data-testid="record-premium-audit"
+                        onClick={openPremiumAudit}
+                        disabled={!premiumAuditAllowed || premiumAuditBusy}
+                        title={premiumAuditAllowed
+                          ? 'Record the audited premium and issue a PREMIUM_AUDIT version'
+                          : premiumAuditHint}
+                      >
+                        Record premium audit
+                      </button>
+                    </span>
+                  </section>
+
                   <div className="eia-section-title">
                     <h2>Endorsements</h2>
                     <span className="eia-muted">
@@ -5665,6 +5836,149 @@ export default function App() {
               <p>
                 The successor records <span className="eia-mono">{selectedPolicy.policyNumber}</span>
                 {' '}as its renewal source. This policy does not link forward to a successor.
+              </p>
+            </section>
+          </div>
+        </div>
+      )}
+      {premiumAuditOpen && selectedPolicy && (
+        <div className="eia-modal-backdrop">
+          <div
+            className="eia-modal eia-premium-audit-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="premium-audit-dialog-title"
+            aria-describedby="premium-audit-dialog-description"
+            data-testid="premium-audit-dialog"
+          >
+            <div className="eia-section-title" style={{ marginTop: 0 }}>
+              <h2 id="premium-audit-dialog-title">
+                Record premium audit for {selectedPolicy.policyNumber}
+              </h2>
+              <span className="eia-badge">{selectedPolicy.status}</span>
+            </div>
+            <p className="eia-modal-lede" id="premium-audit-dialog-description">
+              A premium audit replaces the policy&apos;s written premium and issues a PREMIUM_AUDIT
+              version. Coverage grants and policy limits are unchanged.
+            </p>
+            <p className="eia-muted eia-modal-currency-context">
+              Current term {selectedPolicy.effectiveDate || '—'} – {selectedPolicy.expirationDate || '—'}
+              {' · '}
+              amounts in {premiumAuditCurrency || 'the policy currency'}
+            </p>
+
+            {premiumAuditError && (
+              <p role="alert" className="eia-modal-error" data-testid="premium-audit-error">
+                {premiumAuditError}
+              </p>
+            )}
+
+            <form className="eia-form-grid" onSubmit={submitPremiumAudit}>
+              <div className="eia-field">
+                <span className="eia-field-label">Current premium</span>
+                <div
+                  className="eia-premium-audit-current"
+                  data-testid="premium-audit-current"
+                >
+                  {formatMoney(selectedPolicy.premiumAmount, selectedPolicy.premiumCurrency)}
+                </div>
+                <span className="eia-field-hint">Written premium before the audit.</span>
+              </div>
+              <div className="eia-field">
+                <label htmlFor="premium-audit-audited">Audited premium</label>
+                <input
+                  id="premium-audit-audited"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={premiumAuditForm.auditedPremium}
+                  onChange={(e) => updatePremiumAudit('auditedPremium', e.target.value)}
+                  autoFocus
+                  required
+                />
+                <span className="eia-field-hint">
+                  Written premium after the audit, in {premiumAuditCurrency || 'the policy currency'}.
+                </span>
+              </div>
+              <div className="eia-field">
+                <label htmlFor="premium-audit-effective-date">Effective date</label>
+                <input
+                  id="premium-audit-effective-date"
+                  type="date"
+                  value={premiumAuditForm.effectiveDate}
+                  onChange={(e) => updatePremiumAudit('effectiveDate', e.target.value)}
+                  required
+                />
+              </div>
+              <div className="eia-field span-3">
+                <span className="eia-field-label">Premium change</span>
+                <div
+                  className={`eia-premium-audit-delta ${premiumAuditDeltaTone}`}
+                  data-testid="premium-audit-delta"
+                >
+                  {premiumAuditDeltaText}
+                </div>
+                <span className="eia-field-hint">
+                  Only the written premium changes; coverage grants and limits are unchanged.
+                </span>
+              </div>
+              <div className="eia-field span-3">
+                <label htmlFor="premium-audit-reason">Reason</label>
+                <input
+                  id="premium-audit-reason"
+                  placeholder="Audit basis, reported exposure, or rating note"
+                  value={premiumAuditForm.reason}
+                  onChange={(e) => updatePremiumAudit('reason', e.target.value)}
+                  required
+                />
+              </div>
+              <div className="eia-field">
+                <label htmlFor="premium-audit-approved-by">Approver ID (optional)</label>
+                <input
+                  id="premium-audit-approved-by"
+                  placeholder="Approver UUID"
+                  value={premiumAuditForm.approvedBy}
+                  onChange={(e) => updatePremiumAudit('approvedBy', e.target.value)}
+                />
+              </div>
+              <div className="eia-field span-2">
+                <label htmlFor="premium-audit-approval-ref">Approval reference (optional)</label>
+                <input
+                  id="premium-audit-approval-ref"
+                  placeholder="Approval UUID or audit worksheet reference"
+                  value={premiumAuditForm.approvalRef}
+                  onChange={(e) => updatePremiumAudit('approvalRef', e.target.value)}
+                />
+              </div>
+              <div className="eia-field span-3 eia-modal-actions">
+                <button type="submit" disabled={premiumAuditBusy}>
+                  {premiumAuditBusy ? 'Recording…' : 'Record audit'}
+                </button>
+                <button
+                  type="button"
+                  className="eia-btn-secondary"
+                  onClick={closePremiumAudit}
+                  disabled={premiumAuditBusy}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+
+            <section
+              className="eia-context-panel"
+              aria-label="Premium audit context"
+              data-testid="premium-audit-context"
+            >
+              <h4>What the audit changes</h4>
+              <p>
+                The audit replaces the policy&apos;s written premium and issues an immutable
+                PREMIUM_AUDIT version. Coverage grants, limits, and the insured and location
+                schedules stay as issued.
+              </p>
+              <p>
+                A no-change audit is still recorded: it confirms the premium, issues a
+                PREMIUM_AUDIT version, and leaves the amount unchanged.
               </p>
             </section>
           </div>

@@ -9,9 +9,9 @@ const AUDIT_VERSION_ID = '55555555-5555-7555-8555-555555555555';
 const APPROVER_ID = 'dddddddd-dddd-7ddd-8ddd-dddddddddddd';
 const APPROVAL_REF = 'eeeeeeee-eeee-7eee-8eee-eeeeeeeeeeee';
 const ACTION_TITLE = 'Record the audited premium and issue a PREMIUM_AUDIT version';
-const AUDITABLE = ['ISSUED', 'IN_FORCE', 'ENDORSED', 'REINSTATED'];
+const AUDITABLE = ['BOUND', 'ISSUED', 'IN_FORCE', 'ENDORSED', 'REINSTATED'];
 const NOT_AUDITABLE = [
-  'DRAFT', 'QUOTED', 'BOUND', 'RENEWED', 'CANCELLED', 'EXPIRED', 'NON_RENEWED', 'VOID'
+  'DRAFT', 'QUOTED', 'RENEWED', 'CANCELLED', 'EXPIRED', 'NON_RENEWED', 'VOID'
 ];
 
 function policy({ premiumAmount = '120000.0000', version = 4, status = 'IN_FORCE' } = {}) {
@@ -171,7 +171,7 @@ test('offers the premium audit action only while the policy is in force', async 
     const reason = page.getByTestId('premium-audit-unavailable');
     await expect(reason).toBeVisible();
     await expect(reason).toHaveText(
-      'Premium audit is available only when the policy is ISSUED, IN_FORCE, ENDORSED, or '
+      'Premium audit is available only when the policy is BOUND, ISSUED, IN_FORCE, ENDORSED, or '
       + `REINSTATED. This policy is ${status}.`
     );
   }

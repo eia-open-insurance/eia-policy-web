@@ -7,7 +7,7 @@
  * reasoned about (and tested) independently.
  */
 
-export const PREMIUM_AUDIT_STATUSES = ['ISSUED', 'IN_FORCE', 'ENDORSED', 'REINSTATED'];
+export const PREMIUM_AUDIT_STATUSES = ['BOUND', 'ISSUED', 'IN_FORCE', 'ENDORSED', 'REINSTATED'];
 
 export function isPremiumAuditable(status) {
   return PREMIUM_AUDIT_STATUSES.includes(String(status || '').toUpperCase());
@@ -17,7 +17,7 @@ export function isPremiumAuditable(status) {
 export function premiumAuditUnavailableReason(status) {
   if (isPremiumAuditable(status)) return '';
   const current = String(status || '').trim() || 'unknown';
-  return `Premium audit is available only when the policy is ISSUED, IN_FORCE, ENDORSED, or REINSTATED. This policy is ${current}.`;
+  return `Premium audit is available only when the policy is BOUND, ISSUED, IN_FORCE, ENDORSED, or REINSTATED. This policy is ${current}.`;
 }
 
 export function todayIsoDate() {

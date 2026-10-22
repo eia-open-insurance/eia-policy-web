@@ -1,4 +1,5 @@
 import { partyRecordLabel } from './party.js';
+import { addYears } from './renewal.js';
 
 export const SUBMISSION_STATUSES = [
   'RECEIVED',
@@ -10,6 +11,15 @@ export const SUBMISSION_STATUSES = [
 ];
 
 export const TERMINAL_SUBMISSION_STATUSES = ['BOUND', 'DECLINED', 'WITHDRAWN'];
+
+/**
+ * Conversion is the explicit hand-off from new-business underwriting to the
+ * Policy domain. It is offered once the submission has a quoted position
+ * (QUOTED) or is already bound (BOUND); earlier stages still lack terms, and
+ * DECLINED/WITHDRAWN submissions are closed. Converting creates a DRAFT policy
+ * and binds the submission in one command.
+ */
+export const CONVERTIBLE_SUBMISSION_STATUSES = ['QUOTED', 'BOUND'];
 
 export const SUBMISSION_STATUS_LABELS = {
   RECEIVED: 'Received',
@@ -76,6 +86,10 @@ export function submissionStatusEndpoint(submissionId) {
   return `${submissionEndpoint(submissionId)}/status`;
 }
 
+export function submissionConvertEndpoint(submissionId) {
+  return `${submissionEndpoint(submissionId)}/convert`;
+}
+
 export function emptySubmissionState() {
   return { items: [], page: 0, size: 20, total: 0, links: {} };
 }
@@ -97,6 +111,12 @@ export function submissionActionsFor(status) {
 
 export function submissionIsTerminal(status) {
   return TERMINAL_SUBMISSION_STATUSES.includes(status);
+}
+
+export function submissionCanConvert(status) {
+  return CONVERTIBLE_SUBMISSION_STATUSES.includes(
+    String(status || '').trim().toUpperCase()
+  );
 }
 
 /**
@@ -286,4 +306,108 @@ export function submissionStatusPayload(status, reason = '') {
   const trimmed = String(reason || '').trim();
   if (trimmed) payload.reason = trimmed;
   return payload;
+}
+
+/**
+ * Conversion terms. The premium is the new policy's written premium and is
+ * entered by the underwriter. The currency follows the submission's requested
+ * limit currency, and the optional expiration defaults to one year after the
+ * requested effective date so the common annual term needs no extra typing.
+ */
+export function defaultSubmissionConversionForm(submission) {
+  return {
+    premiumAmount: '',
+    premiumCurrency: String(submission?.requestedLimitCurrency || 'USD').trim().toUpperCase(),
+    expirationDate: addYears(submission?.requestedEffectiveDate, 1) || ''
+  };
+}
+
+export function validateSubmissionConversionForm(form, submission) {
+  const amount = String(form?.premiumAmount ?? '').trim();
+  if (!amount) return 'Enter the policy premium amount.';
+  const numeric = Number(amount);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return 'Enter a premium amount of zero or greater.';
+  }
+  if (!/^[A-Za-z]{3}$/.test(String(form?.premiumCurrency || '').trim())) {
+    return 'Enter a three-letter premium currency, such as USD.';
+  }
+  const expiration = String(form?.expirationDate || '').trim();
+  if (expiration) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(expiration)) {
+      return 'Enter a valid expiration date.';
+    }
+    const effective = String(submission?.requestedEffectiveDate || '').trim();
+    if (effective && expiration <= effective) {
+      return 'Expiration date must be after the requested effective date.';
+    }
+  }
+  return '';
+}
+
+/**
+ * The expiration member is optional: when blank it is omitted so the Policy
+ * domain can derive the term instead of receiving an empty date string.
+ */
+export function submissionConversionPayload(form) {
+  const payload = {
+    premiumAmount: String(form?.premiumAmount ?? '').trim(),
+    premiumCurrency: String(form?.premiumCurrency || '').trim().toUpperCase()
+  };
+  const expiration = String(form?.expirationDate || '').trim();
+  if (expiration) payload.expirationDate = expiration;
+  return payload;
+}
+
+/** `Location: /api/v1/policies/{policyId}` identifies the created record. */
+function policyIdFromLocation(location) {
+  const text = String(location || '').trim();
+  if (!text) return '';
+  try {
+    const path = new URL(text, 'http://localhost').pathname;
+    const segments = path.split('/').filter(Boolean);
+    return segments[segments.length - 1] || '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * A conversion command may return the created policy directly, wrapped as
+ * `policy`/`createdPolicy`/`result`, or alongside the bound submission. The
+ * shape is normalized defensively because the command is new; a `Location`
+ * header is the final fallback for the created id.
+ */
+export function normalizeConversionResult(body, location = '') {
+  const envelope = objectValue(body);
+  const nestedPolicy = objectValue(envelope.policy);
+  const createdPolicy = objectValue(envelope.createdPolicy);
+  const resultPolicy = objectValue(envelope.result);
+  const policy = [nestedPolicy, createdPolicy, resultPolicy]
+    .find((candidate) => Object.keys(candidate).length) || envelope;
+  const nestedSubmission = objectValue(envelope.submission);
+  return {
+    policyId: String(firstPresent(
+      policy.policyId,
+      policy.id,
+      envelope.policyId,
+      envelope.createdPolicyId,
+      policyIdFromLocation(location)
+    )),
+    policyNumber: String(firstPresent(
+      policy.policyNumber,
+      policy.number,
+      envelope.policyNumber,
+      envelope.number
+    )),
+    policyStatus: String(firstPresent(
+      policy.status,
+      envelope.policyStatus,
+      'DRAFT'
+    )).trim().toUpperCase(),
+    policy: Object.keys(policy).length ? policy : null,
+    submission: Object.keys(nestedSubmission).length
+      ? normalizeSubmission(nestedSubmission)
+      : null
+  };
 }

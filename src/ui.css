@@ -1584,6 +1584,14 @@ a.eia-btn-secondary.eia-billing-payment-link {
 .eia-submission-status-modal .eia-field { margin-top: 14px; }
 .eia-submission-status-modal .eia-modal-actions { margin-top: 14px; }
 .eia-submission-status-modal .eia-submission-no-policy { margin-top: 16px; }
+.eia-submission-convert { margin-top: 12px; }
+.eia-submission-convert .eia-submission-status-actions { margin-top: 12px; }
+.eia-submission-convert-unavailable { margin: 10px 0 0; font-size: 11px; line-height: 1.5; }
+.eia-submission-convert-modal { width: min(720px, 100%); }
+.eia-submission-convert-summary { margin: 14px 0; padding: 12px 14px; }
+.eia-submission-convert-modal .eia-form-grid { align-items: start; }
+.eia-submission-convert-modal .eia-modal-actions { margin-top: 6px; }
+.eia-submission-convert-modal .eia-context-panel { margin-top: 16px; }
 
 @media (max-width: 1100px) {
   .eia-submission-layout { grid-template-columns: 1fr; }

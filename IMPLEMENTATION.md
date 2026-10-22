@@ -53,10 +53,27 @@ queue and announces the move. A 400/409 stays in the dialog; a 409 re-reads the
 current submission. Detail **Refresh** re-reads both the submission and the
 queue, and a list read failure is contained with Retry.
 
+The conversion panel is separate from the status actions. It offers
+`Convert to policy` for `QUOTED` and `BOUND` submissions; earlier statuses
+explain that a quote or bind is required, and `DECLINED`/`WITHDRAWN` are closed.
+The modal summarizes the applicant, product, requested limit, requested
+effective date, and current status, and collects the premium amount, premium
+currency, and an optional expiration defaulted to one year after the requested
+effective date. Submitting posts
+`{premiumAmount, premiumCurrency, expirationDate?}` to
+`POST /api/v1/policies/submissions/{submissionId}/convert` with an
+`Idempotency-Key`; a blank expiration is omitted. The command creates a DRAFT
+policy and binds the submission. Success refreshes the submission detail and
+queue, then hands the created record to the shell, which switches to the
+Policies tab, selects the policy, pushes `/policy?record=<policyId>`, and
+announces the policy number. The response is normalized from a direct policy, a
+`policy`/`createdPolicy`/`result` wrapper, or the `Location` header. A 400 stays
+in the dialog; a 409 also re-reads the submission.
+
 The context panels state that submissions precede policies, that a submission is
 the new-business opportunity and not a policy, and that quoting or binding a
-submission does not create a policy yet. Status actions update only the
-submission; this remote never creates, amends, quotes, or binds a policy from a
+submission does not create a policy yet. Only the explicit conversion creates
+the DRAFT policy record and binds the submission; status actions update only the
 submission.
 
 The Overview also carries a read-only related-notifications card. It reads
@@ -442,8 +459,8 @@ failure with retry, and a 409 attach conflict that reloads and retries.
   `GET /api/v1/policies/submissions?page=&size=` and filters the loaded page in
   the browser; it does not send `q` or `status` to the API, so a filtered result
   describes the current page rather than the whole server-side queue. Submission
-  referral and quote records, producers, documents, and the
-  submission-to-policy conversion are not rendered in this slice.
+  referral and quote records, producers, and documents are not rendered in this
+  slice.
 - The predecessor policy cannot render a forward link to its successor because
   `PolicyDto` exposes only `renewedFromPolicyId`; the link is kept on the
   successor record.

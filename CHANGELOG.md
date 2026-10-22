@@ -237,14 +237,25 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   a blank reason is omitted. A 400/409 stays in the dialog, a 409 re-reads the
   submission, and success refreshes both the detail and the queue.
 - Context copy and success notices state that submissions precede policies and
-  that quoting or binding a submission does not create a policy yet; the
-  submission workbench never creates, amends, quotes, or binds a policy.
-- Playwright coverage for the tab and context, queue and applicant links,
-  text/status filtering and its empty state, detail fields and allowed actions,
-  refresh, create validation with the predictive Party picker and idempotent
-  POST payload, the no-policy explanation, status moves with and without a
-  reason, list retry, contained 422 create rejection, and contained 400/409
-  status problems.
+  that quoting or binding a submission does not create a policy; only the
+  explicit conversion command creates the policy record.
+- `Convert to policy` action for `QUOTED` and `BOUND` submissions. The modal
+  summarizes the applicant, product, requested limit, requested effective date,
+  and current status, and collects the premium amount, premium currency, and an
+  optional expiration defaulted to one year after the requested effective date.
+  Submitting posts `{premiumAmount, premiumCurrency, expirationDate?}` to
+  `POST /api/v1/policies/submissions/{submissionId}/convert` with an
+  `Idempotency-Key`; a blank expiration is omitted. The command creates a DRAFT
+  policy and binds the submission: success refreshes the submission detail and
+  queue, switches to the Policies tab, selects the created policy, pushes
+  `/policy?record=<policyId>`, and announces the policy number. A 400 stays in
+  the dialog; a 409 also re-reads the submission. The conversion response is
+  normalized from a direct policy, a `policy`/`createdPolicy`/`result` wrapper,
+  or a `Location` header.
+- Playwright coverage for the conversion summary and defaults, the exact
+  payload and idempotency header, `QUOTED` and `BOUND` eligibility, the optional
+  expiration, submission refresh, created-policy selection and URL, premium and
+  expiration validation, and contained 400/409 problems.
 
 ### Changed
 

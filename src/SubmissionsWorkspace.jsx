@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import CrossLink from './navigation.jsx';
+import CrossLink, { navigateTo } from './navigation.jsx';
 import EntityPicker from './EntityPicker.jsx';
 import { api, newIdempotencyKey, problemMessage } from './api.js';
 import { formatMoney } from './format.js';
@@ -7,11 +7,16 @@ import { partyEndpoint, partyRecordLabel } from './party.js';
 import {
   MAX_SUBMISSION_NOTES_LENGTH,
   SUBMISSION_STATUSES,
+  defaultSubmissionConversionForm,
   defaultSubmissionForm,
+  normalizeConversionResult,
   normalizeSubmission,
   normalizeSubmissionPage,
   submissionActionsFor,
   submissionApplicantLabel,
+  submissionCanConvert,
+  submissionConversionPayload,
+  submissionConvertEndpoint,
   submissionCreatePayload,
   submissionEndpoint,
   submissionIsTerminal,
@@ -23,6 +28,7 @@ import {
   submissionStatusPayload,
   submissionStatusTone,
   submissionsEndpoint,
+  validateSubmissionConversionForm,
   validateSubmissionForm
 } from './submissions.js';
 
@@ -71,7 +77,7 @@ function detailFromResponse(body, fallbackId) {
  * binds a policy: a policy is created later, by the Policy domain, in a
  * separate conversion.
  */
-export default function SubmissionsWorkspace() {
+export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
   const [items, setItems] = useState([]);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
@@ -94,6 +100,10 @@ export default function SubmissionsWorkspace() {
   const [reason, setReason] = useState('');
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [convertOpen, setConvertOpen] = useState(false);
+  const [convertForm, setConvertForm] = useState(() => defaultSubmissionConversionForm(null));
+  const [convertBusy, setConvertBusy] = useState(false);
+  const [convertError, setConvertError] = useState('');
   const listRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const labelRequestsRef = useRef(new Set());
@@ -247,6 +257,8 @@ export default function SubmissionsWorkspace() {
     setSelected(null);
     setDetailError('');
     setDetailLoading(false);
+    setConvertOpen(false);
+    setConvertError('');
   }
 
   async function refreshWorkspace() {
@@ -375,6 +387,120 @@ export default function SubmissionsWorkspace() {
     }
   }
 
+  /**
+   * Conversion is the explicit hand-off to the Policy domain: it creates the
+   * DRAFT policy record and binds the submission. It is separate from the
+   * underwriting status actions, which never create a policy.
+   */
+  function openConvertDialog() {
+    if (!selected || !submissionCanConvert(selected.status)) return;
+    setConvertForm(defaultSubmissionConversionForm(selected));
+    setConvertError('');
+    setConvertOpen(true);
+    setNotice('');
+  }
+
+  function closeConvertDialog() {
+    if (convertBusy) return;
+    setConvertOpen(false);
+    setConvertError('');
+  }
+
+  function updateConversion(field, value) {
+    setConvertForm((current) => ({ ...current, [field]: value }));
+    setConvertError('');
+  }
+
+  async function submitConversion(event) {
+    event.preventDefault();
+    if (!selected?.submissionId || convertBusy) return;
+    const target = selected;
+    const validation = validateSubmissionConversionForm(convertForm, target);
+    if (validation) {
+      setConvertError(validation);
+      return;
+    }
+    setConvertBusy(true);
+    setConvertError('');
+    try {
+      const result = await api(submissionConvertEndpoint(target.submissionId), {
+        method: 'POST',
+        body: submissionConversionPayload(convertForm),
+        idempotencyKey: newIdempotencyKey()
+      });
+      if (!result.response.ok) {
+        // A 400 validation problem or a 409 stale/already-converted conflict
+        // stays in the dialog; a 409 also re-reads the submission so the
+        // operator sees the position the domain actually holds.
+        setConvertError(
+          problemMessage(result.body, `Conversion failed: ${result.response.status}`)
+        );
+        if (result.response.status === 409) {
+          await loadSubmissionDetail(target.submissionId, { quiet: true });
+          await loadSubmissions(page, { quiet: true });
+        }
+        return;
+      }
+
+      const conversion = normalizeConversionResult(
+        result.body,
+        result.response.headers.get('Location')
+      );
+      if (!conversion.policyId) {
+        setConvertError(
+          'The conversion succeeded but did not return the new policy id, so it cannot be opened. Refresh the queue and open the policy from the policy book.'
+        );
+        return;
+      }
+
+      // The command also binds the submission. The envelope may already carry
+      // the converted projection, so show it immediately, then re-read both the
+      // detail and the queue before leaving the tab; a return to Submissions
+      // shows the server's position rather than the stale QUOTED row.
+      if (conversion.submission?.submissionId) {
+        const converted = conversion.submission;
+        setSelected((current) => (current ? { ...current, ...converted } : converted));
+        setItems((current) => current.map((item) => (
+          item.submissionId === converted.submissionId
+            ? { ...item, ...converted }
+            : item
+        )));
+      }
+      await loadSubmissionDetail(target.submissionId, { quiet: true });
+      await loadSubmissions(page, { quiet: true });
+
+      setConvertOpen(false);
+      setConvertError('');
+      const policyReference = conversion.policyNumber
+        || `${conversion.policyId.slice(0, 8)}…`;
+      setNotice(
+        `${result.replayed ? 'Idempotent replay: ' : ''}Converted submission `
+        + `${target.submissionNumber || submissionReference(target)} to DRAFT policy `
+        + `${policyReference}.`
+      );
+
+      if (typeof onPolicyConverted === 'function') {
+        onPolicyConverted({
+          policyId: conversion.policyId,
+          policyNumber: conversion.policyNumber,
+          policyStatus: conversion.policyStatus,
+          replayed: result.replayed,
+          submissionId: target.submissionId,
+          submissionNumber: target.submissionNumber,
+          submissionReference: submissionReference(target)
+        });
+      } else {
+        // Standalone use still lands on the created policy; the shell handles
+        // the tab switch when it provides the callback.
+        navigateTo(`/policy?record=${encodeURIComponent(conversion.policyId)}`);
+      }
+    } catch (e) {
+      setConvertError(e.message);
+    } finally {
+      setConvertBusy(false);
+    }
+  }
+
   function applicantText(submission) {
     const label = submissionApplicantLabel(submission, applicantLabels);
     if (label) return label;
@@ -383,6 +509,7 @@ export default function SubmissionsWorkspace() {
 
   const selectedActions = selected ? submissionActionsFor(selected.status) : [];
   const selectedNumber = selected ? submissionReference(selected) : '';
+  const selectedConvertible = selected ? submissionCanConvert(selected.status) : false;
 
   return (
     <section className="eia-submissions" data-testid="submissions-workspace">
@@ -751,17 +878,51 @@ export default function SubmissionsWorkspace() {
                       <b>{submissionIsTerminal(selected.status) ? 'This submission is closed.' : 'No status actions are available.'}</b>
                       <span>
                         {selected.status === 'BOUND'
-                          ? ' Binding records the underwriting position only; it does not create a policy.'
+                          ? ' Binding records the underwriting position only; it does not create a policy. Convert the submission to create the DRAFT policy.'
                           : ' No further status actions are available for this submission.'}
                       </span>
                     </div>
                   )}
                   <p className="eia-submission-no-policy" data-testid="submission-no-policy">
                     <b>Quoting or binding does not create a policy yet.</b> The policy record is
-                    created separately after the submission is converted.
+                    created by the explicit Convert to policy action, which also binds the
+                    submission.
                   </p>
                 </section>
               </div>
+
+              <section
+                className="eia-card eia-submission-convert"
+                aria-label="Convert submission to policy"
+                data-testid="submission-convert-panel"
+              >
+                <h3>Convert to policy</h3>
+                <p className="eia-muted eia-submission-action-lede">
+                  Conversion creates a <b>DRAFT</b> policy from this submission&apos;s applicant,
+                  product, and requested limit, and <b>binds the submission</b>. The new policy
+                  record is owned by the Policy domain; the submission keeps its own history.
+                </p>
+                {selectedConvertible ? (
+                  <div className="eia-submission-status-actions">
+                    <button
+                      type="button"
+                      data-testid="submission-convert"
+                      onClick={openConvertDialog}
+                    >
+                      Convert to policy
+                    </button>
+                  </div>
+                ) : (
+                  <p
+                    className="eia-muted eia-submission-convert-unavailable"
+                    data-testid="submission-convert-unavailable"
+                  >
+                    {['RECEIVED', 'REFERRED'].includes(selected.status)
+                      ? 'Convert to policy is available once the submission is quoted or bound.'
+                      : 'This submission is closed and cannot be converted to a policy.'}
+                  </p>
+                )}
+              </section>
 
               <section
                 className="eia-context-panel"
@@ -778,6 +939,11 @@ export default function SubmissionsWorkspace() {
                   <b>Status actions update only this submission.</b> Even BOUND means the
                   underwriting position is bound on the submission; the Policy domain creates the
                   policy record separately, with its own version, coverages, limits, and premium.
+                </p>
+                <p>
+                  <b>Conversion is explicit.</b> Convert to policy on a QUOTED or BOUND submission
+                  creates the DRAFT policy in the Policy domain and binds the submission; quoting or
+                  binding the submission on its own never creates a policy record.
                 </p>
               </section>
             </>
@@ -1030,9 +1196,152 @@ export default function SubmissionsWorkspace() {
             {['QUOTED', 'BOUND'].includes(action.status) && (
               <p className="eia-submission-no-policy" data-testid="submission-action-no-policy">
                 <b>No policy is created by this action.</b> Quoting or binding a submission does not
-                create a policy yet; the policy record is created separately after conversion.
+                create a policy yet; use Convert to policy to create the DRAFT policy record.
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {convertOpen && selected && (
+        <div className="eia-modal-backdrop">
+          <div
+            className="eia-modal eia-submission-modal eia-submission-convert-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="submission-convert-dialog-title"
+            aria-describedby="submission-convert-dialog-description"
+            data-testid="submission-convert-dialog"
+          >
+            <div className="eia-section-title" style={{ marginTop: 0 }}>
+              <h2 id="submission-convert-dialog-title">
+                Convert to policy · {selectedNumber}
+              </h2>
+              <span className={`eia-pill ${submissionStatusTone(selected.status)}`}>
+                {selected.status}
+              </span>
+            </div>
+            <p className="eia-modal-lede" id="submission-convert-dialog-description">
+              Converting creates a <b>DRAFT</b> policy from this submission&apos;s applicant, product,
+              and requested limit, and <b>binds the submission</b>. The premium and term entered here
+              become the new policy&apos;s terms.
+            </p>
+
+            {convertError && (
+              <p
+                role="alert"
+                className="eia-modal-error"
+                data-testid="submission-convert-error"
+              >
+                {convertError}
+              </p>
+            )}
+
+            <section
+              className="eia-card eia-submission-convert-summary"
+              aria-label="Conversion summary"
+              data-testid="submission-convert-summary"
+            >
+              <dl className="eia-kv">
+                <dt>Applicant</dt>
+                <dd>{applicantText(selected)}</dd>
+                <dt>Product</dt>
+                <dd>{selected.productCode || '—'}</dd>
+                <dt>Requested limit</dt>
+                <dd>{limitText(selected)}</dd>
+                <dt>Requested effective</dt>
+                <dd>{selected.requestedEffectiveDate || '—'}</dd>
+                <dt>Submission status</dt>
+                <dd>
+                  <span className={`eia-pill ${submissionStatusTone(selected.status)}`}>
+                    {selected.status}
+                  </span>
+                </dd>
+              </dl>
+            </section>
+
+            <form className="eia-form-grid" onSubmit={submitConversion}>
+              <div className="eia-field">
+                <label htmlFor="submission-convert-premium">Premium amount</label>
+                <input
+                  id="submission-convert-premium"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="125000.00"
+                  value={convertForm.premiumAmount}
+                  onChange={(event) => updateConversion('premiumAmount', event.target.value)}
+                />
+                <span className="eia-field-hint">
+                  Written premium for the new policy. The submission&apos;s requested limit is not
+                  copied into premium.
+                </span>
+              </div>
+
+              <div className="eia-field">
+                <label htmlFor="submission-convert-currency">Premium currency</label>
+                <input
+                  id="submission-convert-currency"
+                  maxLength={3}
+                  placeholder="USD"
+                  value={convertForm.premiumCurrency}
+                  onChange={(event) => updateConversion(
+                    'premiumCurrency',
+                    event.target.value.toUpperCase()
+                  )}
+                />
+                <span className="eia-field-hint">Three-letter ISO 4217 code.</span>
+              </div>
+
+              <div className="eia-field">
+                <label htmlFor="submission-convert-expiration">
+                  Expiration date (optional)
+                </label>
+                <input
+                  id="submission-convert-expiration"
+                  type="date"
+                  value={convertForm.expirationDate}
+                  onChange={(event) => updateConversion('expirationDate', event.target.value)}
+                />
+                <span className="eia-field-hint">
+                  Defaults to one year after the requested effective date. Leave blank to omit it
+                  from the command.
+                </span>
+              </div>
+
+              <div className="eia-field span-3 eia-modal-actions">
+                <button type="submit" disabled={convertBusy}>
+                  {convertBusy ? 'Converting…' : 'Convert to policy'}
+                </button>
+                <button
+                  type="button"
+                  className="eia-btn-secondary"
+                  onClick={closeConvertDialog}
+                  disabled={convertBusy}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+
+            <section
+              className="eia-context-panel"
+              aria-label="Conversion context"
+              data-testid="submission-convert-context"
+            >
+              <h4>Conversion creates the policy record</h4>
+              <p>
+                <b>The Policy domain creates a DRAFT policy and binds this submission.</b> The new
+                policy starts with the submission&apos;s applicant, product, requested limit, and
+                requested effective date; the premium and expiration you enter are its initial
+                terms.
+              </p>
+              <p>
+                <b>This is separate from the status actions.</b> Quoting or binding the submission
+                records the underwriting position only. Conversion is the explicit hand-off that
+                creates policy coverage, limits, premium, and version history.
+              </p>
+            </section>
           </div>
         </div>
       )}

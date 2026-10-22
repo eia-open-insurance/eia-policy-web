@@ -57,9 +57,19 @@ before a policy record does:
   `REFERRED -> QUOTED, DECLINED, WITHDRAWN`; `QUOTED -> BOUND, DECLINED,
   WITHDRAWN`; `BOUND`, `DECLINED`, and `WITHDRAWN` are terminal. The tab
   explains that submissions precede policies and that quoting or binding a
-  submission does not create a policy yet; the policy is created separately
-  after conversion. A submission never creates, amends, quotes, or binds a
-  policy in this remote.
+  submission does not create a policy yet; the DRAFT policy is created by the
+  explicit `Convert to policy` action.
+- `Convert to policy` is offered for `QUOTED` and `BOUND` submissions. The modal
+  summarizes the applicant, product, requested limit, requested effective date,
+  and current status, and collects the premium amount, premium currency, and an
+  optional expiration defaulted to one year after the requested effective date.
+  Submitting posts `{premiumAmount, premiumCurrency, expirationDate?}` to
+  `POST /api/v1/policies/submissions/{submissionId}/convert` with an
+  `Idempotency-Key`; a blank expiration is omitted. The command creates a DRAFT
+  policy and binds the submission: success refreshes the submission detail and
+  queue, switches to the Policies tab, selects the created policy, updates the
+  URL to `/policy?record=<policyId>`, and announces the policy number. A 400
+  stays in the dialog; a 409 also re-reads the submission.
 
 Opening a policy shows a record detail with tabs:
 

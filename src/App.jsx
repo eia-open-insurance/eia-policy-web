@@ -598,7 +598,7 @@ export default function App() {
       const detail = await api(`/api/v1/policies/${policyId}`);
       if (!detail.response.ok) {
         setError(problemMessage(detail.body, `Load failed: ${detail.response.status}`));
-        return;
+        return null;
       }
       setSelected({
         id: policyId,
@@ -639,8 +639,10 @@ export default function App() {
         setLocationForm(defaultLocationForm(detail.body));
         setCancelForm(defaultCancelForm());
       }
+      return detail.body;
     } catch (e) {
       setError(e.message);
+      return null;
     } finally {
       setTabLoading(false);
     }
@@ -1496,6 +1498,44 @@ export default function App() {
         if (tab !== 'overview') {
           await loadTabData(tab, selected.id);
         }
+      }
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  /**
+   * A submission conversion creates and binds records in the Policy domain.
+   * The submission tab has already refreshed itself; the shell switches to the
+   * direct book, selects the created DRAFT policy, keeps the URL shareable, and
+   * announces its policy number.
+   */
+  async function handleSubmissionConverted({
+    policyId,
+    policyNumber,
+    policyStatus,
+    replayed,
+    submissionReference: submissionRef
+  }) {
+    if (!policyId) return;
+    setWorkspaceTab('policies');
+    setShowCreate(false);
+    setError('');
+    setNotice('');
+    try {
+      await load(0);
+      const record = await openPolicy(policyId, { silent: true });
+      const reference = policyNumber || record?.policyNumber || policyId;
+      const status = policyStatus || record?.status || 'DRAFT';
+      const source = submissionRef ? `submission ${submissionRef}` : 'the submission';
+      setNotice(
+        `${replayed ? 'Idempotent replay: ' : ''}`
+        + `Converted ${source} to ${status} policy ${reference}.`
+      );
+      try {
+        window.history.pushState({}, '', `/policy?record=${encodeURIComponent(policyId)}`);
+      } catch {
+        // The record is already selected; the URL is a convenience for reloads.
       }
     } catch (e) {
       setError(e.message);
@@ -3097,7 +3137,7 @@ export default function App() {
       </header>
 
       {error && <p role="alert">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
+      {notice && <p role="status" data-testid="policy-notice">{notice}</p>}
 
       {showCreate && (
         <section className="eia-card" aria-label="Create policy" style={{ marginBottom: 16 }}>
@@ -7053,7 +7093,7 @@ export default function App() {
           id="workspace-panel-submissions"
           aria-labelledby="workspace-tab-submissions"
         >
-          <SubmissionsWorkspace />
+          <SubmissionsWorkspace onPolicyConverted={handleSubmissionConverted} />
         </div>
       )}
     </main>

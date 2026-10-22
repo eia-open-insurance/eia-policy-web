@@ -93,6 +93,8 @@ export async function selectParty(page, label = PARTY.label) {
  * Serves GET /api/v1/products?q=&status=ACTIVE for the policy and submission
  * product pickers. The query filter mirrors the catalog so a spec can verify
  * that searching by code or name reached the server and narrowed the options.
+ * An optional `status` filter mirrors the catalog's ACTIVE/RETIRED filter; the
+ * pickers always send ACTIVE, so a retired fixture stays out of their options.
  * Pass `items: []` to exercise the empty-catalog manual-code fallback, or a
  * non-200 `status` to exercise the unavailable-catalog fallback.
  */
@@ -111,9 +113,14 @@ export async function mockProducts(page, { items = PRODUCTS, status = 200, onReq
       return;
     }
     const q = (url.searchParams.get('q') || '').trim().toLowerCase();
-    const filtered = q
-      ? items.filter((product) => `${product.code} ${product.name}`.toLowerCase().includes(q))
-      : items;
+    const requestedStatus = (url.searchParams.get('status') || '').trim().toUpperCase();
+    const filtered = items.filter((product) => {
+      if (requestedStatus && String(product.status || '').toUpperCase() !== requestedStatus) {
+        return false;
+      }
+      if (!q) return true;
+      return `${product.code} ${product.name}`.toLowerCase().includes(q);
+    });
     await fulfillJson(route, 200, {
       items: filtered,
       page: 0,

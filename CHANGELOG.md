@@ -14,12 +14,23 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   shows the selected product code and catalog label, and sends only the
   `productCode` on create. An empty or unavailable catalog falls back to manual
   code entry so both create flows stay usable.
-- Read-only Product catalog workspace tab over the active catalog, with a
-  server-side search by code or name and a detail panel for the selected
-  product.
+- Product catalog workspace tab over the whole catalog, with a server-side
+  search by code or name, an All/ACTIVE/RETIRED status filter, and a detail
+  panel for the selected product.
+- `New product` modal over `POST /api/v1/products` with code, name,
+  product-line (`CGL`, `PRODUCTS_LIABILITY`, `UMBRELLA`, `EXCESS`, `OTHER`), and
+  two-letter jurisdiction fields, client validation, contained duplicate-code
+  409 feedback, and refresh/select of the created product.
+- `Retire`/`Reactivate` actions with confirmation over
+  `PATCH /api/v1/products/{productId}/status`, contained conflicts, and a
+  refresh that keeps the selected product when it is still in the filter.
+- Only ACTIVE products are offered by the policy and submission pickers;
+  retiring stops new selection while existing policies and submissions keep
+  their stored product code and are not rewritten.
 - Playwright coverage for product picker search/selection/payload, the manual
-  fallbacks for an empty and an unavailable catalog, and the catalog panel's
-  list, search, and detail.
+  fallbacks for an empty and an unavailable catalog, catalog create/duplicate/
+  retire/reactivate, the All/ACTIVE/RETIRED filter, and retired-product picker
+  exclusion.
 - Policy web remote: React 19 workbench, Webpack 5 Module Federation (`eia_policy` / `./App`), dev proxy to the domain, and a Playwright test with a mocked API.
 - Paginated envelope handling with previous/next controls and a total counter.
 - `Idempotency-Key` on create with replay notice.

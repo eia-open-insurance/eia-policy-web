@@ -1615,3 +1615,9 @@ a.eia-btn-secondary.eia-billing-payment-link {
   .eia-submission-row-party { white-space: normal; }
 }
 
+/* Product catalog: create and lifecycle dialogs. */
+.eia-product-create-modal { width: min(720px, 100%); }
+.eia-product-status-modal { width: min(560px, 100%); }
+.eia-product-status-modal .eia-modal-actions { margin-top: 16px; }
+.eia-product-retired-note { border-left: 3px solid var(--eia-amber); }
+

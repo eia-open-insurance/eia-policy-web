@@ -10,25 +10,46 @@ cancellation/reinstatement, and an event-derived activity timeline.
 
 ## Products
 
-The active product catalog is read from `GET /api/v1/products?q=&status=ACTIVE`.
-`src/products.js` holds the endpoint, tolerant normalization (a bare array or an
+The product catalog is read from `GET /api/v1/products?q=&status=…`, where the
+optional `status` is `ACTIVE` or `RETIRED` and an omitted status returns the
+whole catalog. `src/products.js` holds the endpoints, the product-line and
+status vocabularies, tolerant normalization (a bare array or an
 `items`/`products` envelope, `code`/`productCode`, and
-`name`/`productName`/`displayName`), status tone, and display labels.
+`name`/`productName`/`displayName`), create-form defaults, validation, the
+create payload, status tone, and display labels.
 `src/ProductPicker.jsx` is the debounced, abortable typeahead shared by New
-policy and New submission: it searches by code or name, shows the selected
-product code and catalog label, and reports `(code, product)` to the form. Both
-forms store `productCode` for the command and keep the label only as display
-state, so no `productLabel` member is sent. When the unfiltered catalog read
-returns no products, or the read fails, the picker switches to a manual code
-input and states the reason. A filtered read with no matches keeps the search
-input so the operator can keep typing, and offers a manual-entry action.
+policy and New submission: it searches by code or name, always sends
+`status=ACTIVE`, shows the selected product code and catalog label, and reports
+`(code, product)` to the form. Both forms store `productCode` for the command
+and keep the label only as display state, so no `productLabel` member is sent.
+When the unfiltered catalog read returns no products, or the read fails, the
+picker switches to a manual code input and states the reason. A filtered read
+with no matches keeps the search input so the operator can keep typing, and
+offers a manual-entry action.
 
-The third workspace tab, **Product catalog**, reads the same active catalog with
-a server-side search and renders the active list plus the selected product's
-code, name, status, type, description, and id. It is read-only: the catalog is
-curated by the Policy domain and this slice exposes GET only. New policy starts
-with no product and validation requires a selection before submit; the
-submission create command already required its product code.
+The third workspace tab, **Product catalog**, is the catalog-management surface.
+It reads the catalog with a server-side search and an All/ACTIVE/RETIRED status
+filter, and renders the list plus the selected product's code, name, line,
+jurisdiction, status, version, type, description, and id. `New product` posts
+`{productCode, productName, productLine, jurisdiction}` to
+`POST /api/v1/products`: the code is normalized to upper case and capped at 32
+characters, the name at 200, the line is one of `CGL`, `PRODUCTS_LIABILITY`,
+`UMBRELLA`, `EXCESS`, `OTHER`, and the jurisdiction is a two-letter
+ISO 3166-1 alpha-2 code. Client validation mirrors those rules; a 409 duplicate
+code stays inside the open modal, and a successful create clears the search and
+status filter, refreshes the catalog, and selects the new ACTIVE product.
+
+`Retire` and `Reactivate` open a confirmation dialog and `PATCH`
+`/api/v1/products/{productId}/status` with `{status}`. Retiring stops new
+selection: the policy and submission pickers only read `status=ACTIVE`, so a
+retired product is never offered as a catalog option on a new record. Existing policies and
+submissions are not rewritten; the product code they already store remains
+valid, along with their coverage, limits, premium, billing, and lifecycle. The
+catalog's default All view (and the RETIRED filter) keeps retired products
+reviewable, and Reactivate makes the product selectable again. A status 409 is
+contained in the dialog and re-reads the catalog. New policy starts with no
+product and validation requires a selection before submit; the submission
+create command already required its product code.
 
 ## Submissions
 
@@ -381,11 +402,12 @@ payloads, form defaults and validation, status/type/label helpers, and tolerant
 normalization of the program read and list. `src/ProgramPicker.jsx` is the
 debounced, abortable program typeahead; it only selects an existing program and
 never mutates the policy.
-`src/products.js` holds the active product catalog endpoint, tolerant list and
-record normalization, status tone, and display labels; `src/ProductPicker.jsx`
-is the debounced, abortable product typeahead shared by the two create forms,
-with the empty/unavailable-catalog manual fallback. `src/ProductCatalog.jsx` is
-the read-only Product catalog tab.
+`src/products.js` holds the product catalog endpoints, line and status
+vocabularies, create-form defaults/validation/payload, tolerant list and record
+normalization, status tone, and display labels; `src/ProductPicker.jsx` is the
+debounced, abortable product typeahead shared by the two create forms, with the
+empty/unavailable-catalog manual fallback. `src/ProductCatalog.jsx` is the
+Product catalog management tab (create, status filter, retire/reactivate).
 `src/legalEntities.js` holds the legal-entity type catalog, endpoints, create and
 attach payloads, form validation, status/type/label helpers, and tolerant
 normalization of the entity read and list (catalog names such as `entityCode`,
@@ -416,7 +438,9 @@ ETag/If-Match; `tests/product-catalog.spec.js` covers the shared product
 picker's search by code and name (including the `q`/`status=ACTIVE` query and
 tenant header), the selected-product card, the policy `productCode` payload
 without the display label, the empty- and unavailable-catalog manual fallbacks,
-and the read-only Product catalog panel's list, search, and detail;
+and the Product catalog panel's create validation and payload, duplicate 409
+containment, retire/reactivate confirmation and PATCH payloads, All/ACTIVE/
+RETIRED filtering, refresh/selection, and the retired-product picker exclusion;
 `tests/coverage.spec.js` covers adding a coverage with limits and
 applying aggregate erosion; `tests/endorsement.spec.js` covers issuing an
 endorsement, the new version row, and the `428 APPROVAL_REQUIRED` problem;
@@ -522,13 +546,15 @@ failure with retry, and a 409 attach conflict that reloads and retries.
   published by a backend in this tree. Legal-entity relationships, organization
   units, and the capacity/coinsurance/fronting structures that reference the
   entity are not rendered.
-- The product pickers and the Product catalog tab consume
-  `GET /api/v1/products?q=&status=ACTIVE`, which has no backend in this tree.
-  The response is normalized defensively (`items`/`products`, `code`/
-  `productCode`, `name`/`productName`/`displayName`). Product creation, editing,
-  status changes, and version history are not rendered; the panel is read-only,
-  and the forms fall back to manual code entry when the catalog is empty or
-  unavailable.
+- The product pickers consume `GET /api/v1/products?q=&status=ACTIVE` and the
+  Product catalog tab additionally consumes `POST /api/v1/products` and
+  `PATCH /api/v1/products/{productId}/status`. The Policy domain forwards these
+  to the Policy expert; the remote still normalizes responses defensively
+  (`items`/`products`, `code`/`productCode`, `name`/`productName`/
+  `displayName`, `productId`/`id`). Product editing (name, line, jurisdiction)
+  and version history are not rendered: the only catalog mutations are create
+  and the ACTIVE/RETIRED status toggle. The create forms fall back to manual
+  code entry when the catalog is empty or unavailable.
 - No optimistic UI or offline queue; every mutation waits for the domain.
 - The remote does not read the field-usage manifest or the theme/UI-kit packages
   from `eia-frontend`.

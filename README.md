@@ -33,8 +33,8 @@ the create flow stays usable. The `New submission` form uses the same picker.
 
 The page has three workspace tabs. **Policies** is the direct policy register and
 record described below. **Submissions** is the new-business queue, which exists
-before a policy record does. **Product catalog** is a read-only view of the
-active products used by both create forms:
+before a policy record does. **Product catalog** manages the taxonomy used by
+both create forms:
 
 - A prominent search over number, applicant, product, tort, status, and notes
   plus a status filter narrow the queue, with a match count and a clear action.
@@ -79,11 +79,27 @@ active products used by both create forms:
   queue, switches to the Policies tab, selects the created policy, updates the
   URL to `/policy?record=<policyId>`, and announces the policy number. A 400
   stays in the dialog; a 409 also re-reads the submission.
-- The **Product catalog** tab lists the active products from
-  `GET /api/v1/products?q=…&status=ACTIVE`, with a search over code and name and
-  a detail panel for the selected product. It is read-only: selecting a product
-  in the create forms is what records a `productCode`, and the forms fall back
-  to manual code entry when the catalog is empty or unavailable.
+- The **Product catalog** tab lists the catalog from
+  `GET /api/v1/products?q=…&status=…` with a search over code and name, an
+  All/ACTIVE/RETIRED status filter, and a detail panel for the selected product
+  (code, name, line, jurisdiction, status, version, and id). `New product` posts
+  `{productCode, productName, productLine, jurisdiction}` to
+  `POST /api/v1/products`; the line is one of `CGL`, `PRODUCTS_LIABILITY`,
+  `UMBRELLA`, `EXCESS`, or `OTHER`, the jurisdiction is a two-letter
+  ISO 3166-1 alpha-2 code, and the code is upper-cased and tenant-unique. A
+  duplicate code is a canonical 409 that stays inside the modal, and a
+  successful create refreshes the catalog and selects the new ACTIVE product.
+- `Retire` and `Reactivate` ask for confirmation and `PATCH`
+  `/api/v1/products/{productId}/status` with `{status}`. Retiring removes the
+  product from the create-form pickers but leaves every existing policy and
+  submission unchanged: the stored `productCode`, coverage, limits, premium,
+  billing, and lifecycle stay as they are. Reactivating makes it selectable
+  again. The policy and submission product pickers always read `status=ACTIVE`,
+  so a retired product is never offered as a catalog option on a new record; the
+  catalog's default All filter (or the RETIRED filter) keeps retired products
+  reviewable.
+  The forms fall back to manual code entry when the catalog is empty or
+  unavailable.
 
 Opening a policy shows a record detail with tabs:
 
@@ -246,7 +262,11 @@ the created-note link and ledger source cancellation number, and 409/500
 containment. `tests/product-catalog.spec.js` covers the product picker's server
 search by code and name, the selected-product card, the policy `productCode`
 payload without the label, both manual fallbacks (empty and unavailable
-catalog), and the read-only Product catalog panel with its search and detail.
+catalog), and the Product catalog management tab: create validation and a
+successful create with refresh/selection, a contained duplicate-code 409, retire
+and reactivate with confirmation and PATCH payloads, the All/ACTIVE/RETIRED
+filter, retired products staying out of the create-form pickers, and the
+retiring-does-not-change-existing-records explanation.
 `@swc/core` is pinned to `1.10.7`.
 
 ## Responsibilities

@@ -120,6 +120,10 @@ import {
   renewalUnavailableReason,
   validateRenewalForm
 } from './renewal.js';
+import {
+  isCancellationCreditNoteOpen,
+  reinstatementCreditNoteGuard
+} from './reinstatement.js';
 
 const TENANT = '11111111-1111-7111-8111-111111111111';
 const PAGE_SIZE = 20;
@@ -414,6 +418,7 @@ export default function App() {
   const [locationForm, setLocationForm] = useState(() => defaultLocationForm(null));
   const [cancelForm, setCancelForm] = useState(defaultCancelForm);
   const [reinstateForm, setReinstateForm] = useState(defaultReinstateForm);
+  const [reinstateError, setReinstateError] = useState(null);
   const [renewOpen, setRenewOpen] = useState(false);
   const [renewForm, setRenewForm] = useState(() => defaultRenewalForm(null));
   const [renewBusy, setRenewBusy] = useState(false);
@@ -593,6 +598,7 @@ export default function App() {
     setError('');
     setRenewOpen(false);
     setRenewError('');
+    setReinstateError(null);
     if (!options.silent) setNotice('');
     setTabLoading(true);
     try {
@@ -1277,6 +1283,7 @@ export default function App() {
     setCurrentVersion(null);
     setRenewOpen(false);
     setRenewError('');
+    setReinstateError(null);
     setRenewedFrom(null);
     clearRelated();
     clearDocuments();
@@ -1509,6 +1516,7 @@ export default function App() {
     if (!selected) return;
     setError('');
     setNotice('');
+    setReinstateError(null);
     const result = await api(`/api/v1/policies/${selected.id}/reinstate`, {
       method: 'POST',
       body: {
@@ -1523,6 +1531,13 @@ export default function App() {
       etag: selected.etag,
       idempotencyKey: newIdempotencyKey()
     });
+    // An open cancellation credit note blocks reinstatement. The form stays as
+    // the operator left it and the canonical problem is rendered in this
+    // section instead of as a page-level error.
+    if (isCancellationCreditNoteOpen(result.body, result.response.status)) {
+      setReinstateError(reinstatementCreditNoteGuard(result.body));
+      return;
+    }
     if (!mutationSucceeded('Policy reinstated after approval and premium evidence.', result)) return;
     await loadTabData('cancellation');
     await loadTabData('versions');
@@ -5296,6 +5311,55 @@ export default function App() {
                         <button type="submit">Reinstate policy</button>
                       </div>
                     </form>
+                    {reinstateError && (
+                      <div
+                        className="eia-reinstatement-guard"
+                        role="alert"
+                        data-testid="reinstatement-error"
+                      >
+                        <p className="eia-reinstatement-guard-problem">
+                          <code
+                            className="eia-mono"
+                            data-testid="reinstatement-error-code"
+                          >
+                            {reinstateError.code}
+                          </code>
+                          <span data-testid="reinstatement-error-detail">
+                            {reinstateError.detail}
+                          </span>
+                        </p>
+                        {reinstateError.noteNumbers.length > 0 && (
+                          <div
+                            className="eia-reinstatement-guard-remedy"
+                            data-testid="reinstatement-credit-note-guard"
+                          >
+                            <p data-testid="reinstatement-credit-note-guidance">
+                              {reinstateError.guidance}
+                            </p>
+                            <p>
+                              Open credit note
+                              {reinstateError.noteNumbers.length === 1 ? '' : 's'}
+                              {': '}
+                              <code className="eia-mono">
+                                {reinstateError.noteNumbers.join(', ')}
+                              </code>
+                              {' '}
+                              <a
+                                href="#credit-notes"
+                                title="Open the Billing credit note ledger"
+                                data-testid="reinstatement-credit-note-link"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  showCreditNoteLedger();
+                                }}
+                              >
+                                Open credit note ledger
+                              </a>
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </section>
                 </section>
               )}
@@ -5906,7 +5970,12 @@ function CreditNotesSection({
   const items = Array.isArray(state.items) ? state.items : [];
 
   return (
-    <section className="eia-credit-notes" aria-label="Credit notes" data-testid="credit-notes">
+    <section
+      id="credit-notes"
+      className="eia-credit-notes"
+      aria-label="Credit notes"
+      data-testid="credit-notes"
+    >
       <div className="eia-section-title">
         <h2>Credit notes</h2>
         <span className="eia-muted">

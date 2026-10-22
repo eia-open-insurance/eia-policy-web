@@ -101,6 +101,11 @@ Opening a policy shows a record detail with tabs:
   to the return premium, policy currency, and `Cancellation <number> return
   premium` reason, and posts the source `cancellationId`. Once the ledger has a
   matching note the row shows **Credit note created** and links to it.
+  Reinstatement is blocked while one of those notes is still `DRAFT`, `ISSUED`,
+  or `APPLIED`: the 409 `CANCELLATION_CREDIT_NOTE_OPEN` problem stays in the
+  Reinstatement section with its code/detail and any note numbers, keeps the
+  form values, and links to the Billing ledger to cancel or reverse the note
+  before retrying.
 - **Renewal** — a record-header **Renew** action for `ISSUED`, `IN_FORCE`,
   `ENDORSED`, and `REINSTATED` policies (disabled with the reason otherwise).
   The modal defaults the effective date to the day after the current expiration,

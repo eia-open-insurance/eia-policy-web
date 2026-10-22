@@ -147,6 +147,13 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   the cancellation list) and Playwright coverage for the prefill, POST payload,
   duplicate 409, generic error, existing-ledger link, and source cancellation
   number.
+- Reinstatement credit-note guard: a 409 `CANCELLATION_CREDIT_NOTE_OPEN` stays in
+  the Reinstatement section with the canonical code/detail and the open note
+  numbers from `meta.noteNumbers` (or the detail), keeps the form values, and
+  links to the Billing ledger with cancel/reverse guidance. The guard clears on
+  retry or record selection; other reinstatement failures keep the page-level
+  problem path. Playwright coverage for the guard, ledger link, retry, selection,
+  and unchanged generic errors.
 
 ### Changed
 

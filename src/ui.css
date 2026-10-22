@@ -1279,3 +1279,32 @@ a.eia-btn-secondary.eia-billing-payment-link {
   letter-spacing: 0;
   font-weight: 400;
 }
+
+/* Reinstatement: a cancellation credit note still open blocks the command. */
+.eia-reinstatement-guard {
+  margin: 12px 0 0;
+  line-height: 1.5;
+}
+.eia-reinstatement-guard p { margin: 0 0 6px; }
+.eia-reinstatement-guard p:last-child { margin-bottom: 0; }
+.eia-reinstatement-guard-problem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+.eia-reinstatement-guard-problem code {
+  white-space: nowrap;
+  font-weight: 700;
+}
+.eia-reinstatement-guard-remedy {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f0c9c9;
+}
+.eia-reinstatement-guard-remedy a {
+  color: #1c5f8f;
+  font-weight: 600;
+  text-decoration: underline;
+}
+.eia-reinstatement-guard-remedy a:hover { color: #123f60; }

@@ -152,6 +152,17 @@ canonical problem and re-reads the ledger; a successful POST refreshes the
 ledger, closes the dialog, and the cancellation row switches to the created-note
 link.
 
+A cancellation's return-premium credit note also guards reinstatement. While a
+`DRAFT`, `ISSUED`, or `APPLIED` note is open, `POST /reinstate` returns 409
+`CANCELLATION_CREDIT_NOTE_OPEN`. The error is contained in the Reinstatement
+section, not the page-level alert: it shows the canonical code and detail, keeps
+every form value, and, when `meta.noteNumbers` (or the detail sentence) names the
+open notes, lists them with the cancel/reverse guidance and an **Open credit note
+ledger** link. The link switches to the Billing tab, where the ledger offers the
+cancel and reverse actions. The guard clears when the operator retries the
+command, changes the selected record, or closes the record; any other
+reinstatement failure keeps the existing page-level problem handling.
+
 ## Structure
 
 `src/App.jsx` is the whole remote. It has three layers:
@@ -198,6 +209,11 @@ normalization of the entity read and list (catalog names such as `entityCode`,
 `name`, `type`, and `jurisdiction`). `src/LegalEntityPicker.jsx` is the
 debounced, abortable legal-entity typeahead; it only selects an existing entity
 and never mutates the policy.
+`src/reinstatement.js` holds the reinstatement credit-note guard: it recognizes
+the `CANCELLATION_CREDIT_NOTE_OPEN` conflict, reads note numbers from
+`meta.noteNumbers` or the canonical detail, and builds the local guard view
+(code, detail, notes, guidance) while leaving all other problems to the existing
+handling.
 
 No business rule is duplicated in the remote; canonical problems from the domain
 are rendered with their field errors.
@@ -240,6 +256,10 @@ and positive-return-premium eligibility, the locked return-premium/currency/
 reason prefill and source cancellation context, the `cancellationId` POST
 payload and idempotency header, the created-note link and ledger source
 cancellation number, the existing-ledger link, and 409/500 containment;
+`tests/reinstatement-credit-note.spec.js` covers the contained 409 code/detail,
+the note-number fallback from detail, the Billing ledger link, the preserved
+form values, the guard clearing on retry and record selection, and the unchanged
+page-level handling of a non-credit-note rejection;
 `tests/renewal.spec.js` covers action eligibility by status,
 modal term and premium/limit defaults, the renewal payload and headers, success
 selection and notice, the predecessor link and its navigation, and the 409

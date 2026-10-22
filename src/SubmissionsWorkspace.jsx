@@ -523,9 +523,10 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
   }
 
   /**
-   * Approve/decline resolves the pending referral only. It records the
-   * directory person who decided it and optional notes; it never changes the
-   * submission status, its terms, or a policy.
+   * Approve/decline resolves the pending referral. It records the directory
+   * person who decided it and optional notes. Approval leaves the submission
+   * REFERRED; a decline also moves the submission lifecycle to DECLINED. It
+   * never changes terms or creates a policy.
    */
   async function submitDecision(event) {
     event.preventDefault();
@@ -1235,9 +1236,9 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
                   <div>
                     <h3>Referral</h3>
                     <p className="eia-muted eia-submission-action-lede">
-                      A referral records the underwriting decision request. Approving or declining
-                      it resolves the referral only: it does not change the submission status or its
-                      terms, and it never creates a policy.
+                      A referral records the underwriting decision request. Approving keeps the
+                      submission REFERRED; declining also moves its lifecycle to DECLINED. A decision
+                      never changes the requested terms and never creates a policy.
                     </p>
                   </div>
                   {selectedReferral && (

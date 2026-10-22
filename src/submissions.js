@@ -179,6 +179,7 @@ export function normalizeSubmission(raw) {
     status: String(firstPresent(raw.status, 'RECEIVED')).trim().toUpperCase(),
     applicantPartyId: String(applicantPartyId),
     applicantLabel: String(applicantLabel),
+    policyId: String(firstPresent(raw.policyId, raw.policy_id)),
     productCode: String(firstPresent(raw.productCode)),
     requestedEffectiveDate: String(
       firstPresent(raw.requestedEffectiveDate, raw.effectiveDate)

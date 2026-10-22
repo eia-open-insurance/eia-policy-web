@@ -303,7 +303,9 @@ test('lists the submission queue, filters it, and opens a detail with the applic
   await expect(page.getByText('ASBESTOS', { exact: true })).toBeVisible();
   await expect(page.getByText('PFAS', { exact: true })).toBeVisible();
   await expect(page.getByText('New mass tort program referral.')).toBeVisible();
-  await expect(page.getByTestId('submission-action-clearance')).toHaveText('Start clearance');
+  await expect(page.getByTestId('submission-action-referred')).toHaveText('Refer');
+  await expect(page.getByTestId('submission-action-quoted')).toHaveText('Quote');
+  await expect(page.getByTestId('submission-action-declined')).toHaveText('Decline');
   await expect(page.getByTestId('submission-action-withdrawn')).toHaveText('Withdraw');
   await expect(page.getByTestId('submission-action-bound')).toHaveCount(0);
   await expect(page.getByTestId('submission-no-policy'))
@@ -313,6 +315,56 @@ test('lists the submission queue, filters it, and opens a detail with the applic
   await page.getByTestId('refresh-submission').click();
   await expect(page.getByTestId('submissions-notice')).toContainText('Submission refreshed.');
   expect(state.detailReads).toBe(2);
+});
+
+test('renders exactly the expert status graph from every status', async ({ page }) => {
+  const graph = [
+    { status: 'RECEIVED', actions: ['REFERRED', 'QUOTED', 'DECLINED', 'WITHDRAWN'] },
+    { status: 'REFERRED', actions: ['QUOTED', 'DECLINED', 'WITHDRAWN'] },
+    { status: 'QUOTED', actions: ['BOUND', 'DECLINED', 'WITHDRAWN'] },
+    { status: 'BOUND', actions: [] },
+    { status: 'DECLINED', actions: [] },
+    { status: 'WITHDRAWN', actions: [] }
+  ];
+  const allTargets = ['REFERRED', 'QUOTED', 'BOUND', 'DECLINED', 'WITHDRAWN'];
+  const items = graph.map((entry, index) => submission({
+    submissionId: `eeeeeeee-eeee-7eee-8eee-${String(index + 1).padStart(12, '0')}`,
+    submissionNumber: `SUB-2026-000001${index + 1}`,
+    status: entry.status
+  }));
+  const state = createState({ items, current: items[0] });
+  await installApi(page, state);
+  await page.goto('/');
+  await openSubmissions(page);
+
+  const filter = page.getByLabel('Filter submissions by status');
+  await expect(filter.locator('option')).toHaveCount(7);
+  for (const status of ['RECEIVED', 'REFERRED', 'QUOTED', 'BOUND', 'DECLINED', 'WITHDRAWN']) {
+    await expect(filter.locator(`option[value="${status}"]`)).toHaveCount(1);
+  }
+
+  for (const entry of graph) {
+    const record = items.find((item) => item.status === entry.status);
+    await page.getByRole('button', { name: `Open submission ${record.submissionNumber}` }).click();
+    await expect(page.getByTestId('submission-status')).toHaveText(entry.status);
+
+    const actionRegion = page.getByRole('region', { name: 'Submission status actions' });
+    await expect(actionRegion.getByRole('button')).toHaveCount(entry.actions.length);
+    for (const target of allTargets) {
+      const action = page.getByTestId(`submission-action-${target.toLowerCase()}`);
+      if (entry.actions.includes(target)) {
+        await expect(action).toBeVisible();
+      } else {
+        await expect(action).toHaveCount(0);
+      }
+    }
+
+    if (entry.actions.length) {
+      await expect(page.getByTestId('submission-terminal')).toHaveCount(0);
+    } else {
+      await expect(page.getByTestId('submission-terminal')).toContainText('This submission is closed');
+    }
+  }
 });
 
 test('creates a submission with an idempotency key and does not create a policy', async ({ page }) => {
@@ -382,7 +434,8 @@ test('moves a quoted submission to BOUND with a reason and never creates a polic
 
   await expect(page.getByTestId('submission-status')).toHaveText('QUOTED');
   await expect(page.getByTestId('submission-action-bound')).toHaveText('Bind');
-  await expect(page.getByTestId('submission-action-clearance')).toHaveCount(0);
+  await expect(page.getByTestId('submission-action-referred')).toHaveCount(0);
+  await expect(page.getByTestId('submission-action-quoted')).toHaveCount(0);
 
   await page.getByTestId('submission-action-bound').click();
   const dialog = page.getByTestId('submission-status-dialog');
@@ -422,17 +475,17 @@ test('omits a blank reason and keeps a status problem inside the dialog', async 
   await openSubmissions(page);
   await openFirstSubmission(page);
 
-  await page.getByTestId('submission-action-clearance').click();
-  await page.getByRole('button', { name: 'Move to CLEARANCE' }).click();
-  await expect(page.getByTestId('submission-status')).toHaveText('CLEARANCE');
-  expect(state.statusPatches[0].body).toEqual({ status: 'CLEARANCE' });
+  await page.getByTestId('submission-action-referred').click();
+  await page.getByRole('button', { name: 'Move to REFERRED' }).click();
+  await expect(page.getByTestId('submission-status')).toHaveText('REFERRED');
+  expect(state.statusPatches[0].body).toEqual({ status: 'REFERRED' });
 
   state.onStatus = async (route) => {
     await problem(route, 400, {
       type: 'https://errors.eia-open-insurance.example/policy/submission-status-invalid',
       title: 'Submission status is not allowed',
       status: 400,
-      detail: 'A submission in CLEARANCE cannot move directly to DECLINED without review notes.',
+      detail: 'The submission cannot move to DECLINED until underwriting review completes.',
       code: 'SUBMISSION_STATUS_INVALID',
       errors: [
         { field: 'status', code: 'SUBMISSION_STATUS_INVALID', message: 'review notes are required' }
@@ -444,11 +497,11 @@ test('omits a blank reason and keeps a status problem inside the dialog', async 
   await page.getByRole('button', { name: 'Move to DECLINED' }).click();
 
   await expect(page.getByTestId('submission-action-error'))
-    .toContainText('A submission in CLEARANCE cannot move directly to DECLINED');
+    .toContainText('The submission cannot move to DECLINED until underwriting review completes.');
   await expect(page.getByTestId('submission-action-error'))
     .toContainText('status: review notes are required');
   await expect(page.getByTestId('submission-status-dialog')).toBeVisible();
-  await expect(page.getByTestId('submission-status')).toHaveText('CLEARANCE');
+  await expect(page.getByTestId('submission-status')).toHaveText('REFERRED');
 });
 
 test('contains a submission list failure and retries', async ({ page }) => {

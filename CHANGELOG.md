@@ -228,10 +228,12 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   `GET /api/v1/policies/submissions/{submissionId}` with every request field,
   status, torts, notes, received/updated timestamps, applicant link, and a
   detail **Refresh** that re-reads the submission and queue.
-- Allowed status actions only for the current status
-  (`RECEIVED`/`CLEARANCE`/`RATING`/`REFERRED`/`QUOTED`; `BOUND`, `DECLINED`, and
-  `WITHDRAWN` terminal) with an optional reason. The action `PATCH`es
-  `/api/v1/policies/submissions/{submissionId}/status` with `{status, reason?}`;
+- Allowed status actions only for the current status, matching the Policy expert
+  graph (`RECEIVED -> REFERRED/QUOTED/DECLINED/WITHDRAWN`, `REFERRED ->
+  QUOTED/DECLINED/WITHDRAWN`, `QUOTED -> BOUND/DECLINED/WITHDRAWN`; `BOUND`,
+  `DECLINED`, and `WITHDRAWN` terminal) with an optional reason. The action
+  `PATCH`es `/api/v1/policies/submissions/{submissionId}/status` with
+  `{status, reason?}`;
   a blank reason is omitted. A 400/409 stays in the dialog, a 409 re-reads the
   submission, and success refreshes both the detail and the queue.
 - Context copy and success notices state that submissions precede policies and

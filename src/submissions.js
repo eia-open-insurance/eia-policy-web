@@ -2,8 +2,6 @@ import { partyRecordLabel } from './party.js';
 
 export const SUBMISSION_STATUSES = [
   'RECEIVED',
-  'CLEARANCE',
-  'RATING',
   'REFERRED',
   'QUOTED',
   'BOUND',
@@ -15,8 +13,6 @@ export const TERMINAL_SUBMISSION_STATUSES = ['BOUND', 'DECLINED', 'WITHDRAWN'];
 
 export const SUBMISSION_STATUS_LABELS = {
   RECEIVED: 'Received',
-  CLEARANCE: 'Clearance',
-  RATING: 'Rating',
   REFERRED: 'Referred',
   QUOTED: 'Quoted',
   BOUND: 'Bound',
@@ -25,31 +21,26 @@ export const SUBMISSION_STATUS_LABELS = {
 };
 
 /**
- * Allowed moves for the submission workbench.
+ * Allowed moves for the submission workbench, mirroring the Policy expert's
+ * one-way status graph:
  *
- * A move records the underwriting position only. Quoting and binding never
- * create a policy: the Policy domain creates that record in a separate,
- * explicit conversion after the submission is complete.
+ *   RECEIVED -> REFERRED, QUOTED, DECLINED, WITHDRAWN
+ *   REFERRED -> QUOTED, DECLINED, WITHDRAWN
+ *   QUOTED   -> BOUND, DECLINED, WITHDRAWN
+ *
+ * BOUND, DECLINED, and WITHDRAWN are terminal. A move records the underwriting
+ * position only. Quoting and binding never create a policy: the Policy domain
+ * creates that record in a separate, explicit conversion after the submission
+ * is complete.
  */
 export const SUBMISSION_ACTIONS = {
   RECEIVED: [
-    { status: 'CLEARANCE', label: 'Start clearance' },
-    { status: 'WITHDRAWN', label: 'Withdraw' }
-  ],
-  CLEARANCE: [
-    { status: 'RATING', label: 'Start rating' },
     { status: 'REFERRED', label: 'Refer' },
-    { status: 'DECLINED', label: 'Decline' },
-    { status: 'WITHDRAWN', label: 'Withdraw' }
-  ],
-  RATING: [
     { status: 'QUOTED', label: 'Quote' },
-    { status: 'REFERRED', label: 'Refer' },
     { status: 'DECLINED', label: 'Decline' },
     { status: 'WITHDRAWN', label: 'Withdraw' }
   ],
   REFERRED: [
-    { status: 'RATING', label: 'Return to rating' },
     { status: 'QUOTED', label: 'Quote' },
     { status: 'DECLINED', label: 'Decline' },
     { status: 'WITHDRAWN', label: 'Withdraw' }
@@ -96,7 +87,7 @@ export function submissionStatusLabel(status) {
 export function submissionStatusTone(status) {
   if (['QUOTED', 'BOUND'].includes(status)) return 'green';
   if (['DECLINED', 'WITHDRAWN'].includes(status)) return 'red';
-  if (['RECEIVED', 'CLEARANCE', 'REFERRED'].includes(status)) return 'amber';
+  if (['RECEIVED', 'REFERRED'].includes(status)) return 'amber';
   return 'blue';
 }
 

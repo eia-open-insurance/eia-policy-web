@@ -51,11 +51,15 @@ before a policy record does:
   `{status, reason?}`. A detail **Refresh** action re-reads the record and the
   queue. A 400 or 409 stays in the dialog; a 409 also re-reads the current
   submission.
-- Submission statuses are `RECEIVED`, `CLEARANCE`, `RATING`, `REFERRED`,
-  `QUOTED`, `BOUND`, `DECLINED`, and `WITHDRAWN`. The tab explains that
-  submissions precede policies and that quoting or binding a submission does
-  not create a policy yet; the policy is created separately after conversion.
-  A submission never creates, amends, quotes, or binds a policy in this remote.
+- Submission statuses are `RECEIVED`, `REFERRED`, `QUOTED`, `BOUND`,
+  `DECLINED`, and `WITHDRAWN`, and the allowed moves mirror the Policy expert
+  graph exactly: `RECEIVED -> REFERRED, QUOTED, DECLINED, WITHDRAWN`;
+  `REFERRED -> QUOTED, DECLINED, WITHDRAWN`; `QUOTED -> BOUND, DECLINED,
+  WITHDRAWN`; `BOUND`, `DECLINED`, and `WITHDRAWN` are terminal. The tab
+  explains that submissions precede policies and that quoting or binding a
+  submission does not create a policy yet; the policy is created separately
+  after conversion. A submission never creates, amends, quotes, or binds a
+  policy in this remote.
 
 Opening a policy shows a record detail with tabs:
 

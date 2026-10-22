@@ -42,11 +42,11 @@ Selecting a submission reads
 submission number and id, status, applicant party link, product code, requested
 effective date, requested limit and currency, tort codes, notes, received date,
 and last-updated timestamp. Only the actions allowed from the current status are
-rendered: `RECEIVED` can start clearance or withdraw; `CLEARANCE` can rate,
-refer, decline, or withdraw; `RATING` can quote, refer, decline, or withdraw;
-`REFERRED` can return to rating, quote, decline, or withdraw; `QUOTED` can bind,
-decline, or withdraw. `BOUND`, `DECLINED`, and `WITHDRAWN` are terminal. Each
-action opens a dialog with an optional reason and sends
+rendered: `RECEIVED` can refer, quote, decline, or withdraw; `REFERRED` can
+quote, decline, or withdraw; `QUOTED` can bind, decline, or withdraw. `BOUND`,
+`DECLINED`, and `WITHDRAWN` are terminal. This mirrors the Policy expert's
+one-way transition graph; the workbench does not invent intermediate
+statuses. Each action opens a dialog with an optional reason and sends
 `PATCH /api/v1/policies/submissions/{submissionId}/status` with `{status,
 reason?}`; the reason is omitted when blank. Success updates the detail and
 queue and announces the move. A 400/409 stays in the dialog; a 409 re-reads the
@@ -442,8 +442,8 @@ failure with retry, and a 409 attach conflict that reloads and retries.
   `GET /api/v1/policies/submissions?page=&size=` and filters the loaded page in
   the browser; it does not send `q` or `status` to the API, so a filtered result
   describes the current page rather than the whole server-side queue. Submission
-  clearance results, rating worksheets, referrals, quotes, producers, documents,
-  and the submission-to-policy conversion are not rendered in this slice.
+  referral and quote records, producers, documents, and the
+  submission-to-policy conversion are not rendered in this slice.
 - The predecessor policy cannot render a forward link to its successor because
   `PolicyDto` exposes only `renewedFromPolicyId`; the link is kept on the
   successor record.

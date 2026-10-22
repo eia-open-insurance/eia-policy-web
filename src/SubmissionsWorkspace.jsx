@@ -392,8 +392,8 @@ export default function SubmissionsWorkspace() {
           <h1>Submissions</h1>
           <p className="subtitle">
             The underwriting queue before a policy exists. Record the applicant and requested
-            terms, search and filter the queue, and move each submission through clearance,
-            rating, referral, quote, and bind.
+            terms, search and filter the queue, and move each submission through referral,
+            quote, and bind.
           </p>
         </div>
         <div className="eia-actions">

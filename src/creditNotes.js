@@ -76,9 +76,14 @@ export function creditNoteStatusPayload(status, installmentId, reason) {
 }
 
 export function creditNoteReasonLabel(value) {
-  const normalized = String(value || '').toUpperCase();
+  const text = String(value || '').trim();
+  const normalized = text.toUpperCase();
   if (REASON_LABELS[normalized]) return REASON_LABELS[normalized];
-  return normalized ? normalized.replace(/_/g, ' ') : '—';
+  // A cancellation-derived note carries the human-readable source sentence as
+  // its free-text reason. Keep that sentence instead of shouting it in caps,
+  // while preserving the legacy enum-ish formatting for all-caps reasons.
+  if (text && text === normalized) return normalized.replace(/_/g, ' ');
+  return text || '—';
 }
 
 export function creditNoteLabel(creditNote) {
@@ -101,6 +106,80 @@ export function defaultCreditNoteForm(policy, unpaidAmount) {
   };
 }
 
+/**
+ * The label a cancellation is known by. The Policy expert currently returns the
+ * cancellation `id`; a `cancellationNumber` (or its catalog aliases) is used when
+ * the projection widens. This label is also printed in the credit-note reason so
+ * the ledger row can be traced back to the posted cancellation.
+ */
+export function cancellationNumber(cancellation) {
+  return firstText(
+    cancellation?.cancellationNumber,
+    cancellation?.cancellationNo,
+    cancellation?.cancellationRef,
+    cancellation?.referenceNumber,
+    cancellation?.number,
+    cancellation?.id
+  );
+}
+
+/** Only a POSTED cancellation with a positive return premium can be credited. */
+export function canCreateCreditNoteForCancellation(cancellation) {
+  if (String(cancellation?.status || '').toUpperCase() !== 'POSTED') return false;
+  const amount = numeric(cancellation?.returnPremiumAmount);
+  return amount !== null && amount > 0;
+}
+
+/**
+ * The return-premium credit note is created from the posted cancellation: the
+ * amount is the computed return premium, the currency is the cancellation's
+ * premium currency (the policy currency), and the reason records the source
+ * cancellation number. The amount is fixed because changing it would no longer
+ * match the cancellation it settles.
+ */
+export function cancellationCreditNoteForm(policy, cancellation) {
+  const amount = numeric(cancellation?.returnPremiumAmount);
+  const number = cancellationNumber(cancellation);
+  return {
+    amount: amount === null ? '' : amount.toFixed(2),
+    currency: firstText(
+      cancellation?.premiumCurrency,
+      policy?.premiumCurrency
+    ).toUpperCase(),
+    reason: 'CANCELLATION',
+    reasonText: `Cancellation ${number || '—'} return premium`,
+    cancellationId: firstText(cancellation?.id),
+    cancellationNumber: number
+  };
+}
+
+/** The ledger row already created for a cancellation, when one exists. */
+export function creditNoteForCancellation(notes, cancellationId) {
+  const id = firstText(cancellationId);
+  if (!id) return null;
+  return (Array.isArray(notes) ? notes : []).find(
+    (note) => firstText(note?.cancellationId) === id
+  ) || null;
+}
+
+/**
+ * The source cancellation shown on the ledger row. The read may carry the
+ * number directly; otherwise the loaded cancellation list resolves the stored
+ * cancellation id. A bare id is still a useful last resort.
+ */
+export function creditNoteSourceCancellationLabel(creditNote, cancellations) {
+  const number = firstText(
+    creditNote?.cancellationNumber,
+    creditNote?.sourceCancellationNumber
+  );
+  if (number) return number;
+  const id = firstText(creditNote?.cancellationId);
+  if (!id) return '';
+  const cancellation = (Array.isArray(cancellations) ? cancellations : [])
+    .find((row) => firstText(row?.id) === id);
+  return cancellationNumber(cancellation) || id;
+}
+
 export function validateCreditNoteForm(form) {
   const amount = numeric(form?.amount);
   if (amount === null || amount <= 0) {
@@ -112,14 +191,24 @@ export function validateCreditNoteForm(form) {
   return '';
 }
 
-/** The currency is derived from the policy; an amount is sent as a JSON number. */
+/**
+ * The currency is derived from the policy; an amount is sent as a JSON number.
+ * A cancellation-derived note sends the source `cancellationId` and its
+ * human-readable reason sentence, which lets the Policy expert tie the note to
+ * the cancellation and reject a duplicate with 409.
+ */
 export function creditNotePayload(form, policy) {
   const amount = numeric(form?.amount);
-  return {
+  const cancellationId = firstText(form?.cancellationId);
+  const payload = {
     amount: amount === null ? form?.amount : Number(amount.toFixed(2)),
     currency: String(policy?.premiumCurrency || form?.currency || '').toUpperCase(),
-    reason: String(form?.reason || '').toUpperCase()
+    reason: cancellationId
+      ? String(form?.reasonText || '').trim()
+      : String(form?.reason || '').toUpperCase()
   };
+  if (cancellationId) payload.cancellationId = cancellationId;
+  return payload;
 }
 
 export function canIssueCreditNote(status) {
@@ -258,7 +347,33 @@ function normalizeCreditNote(row, fallbackCurrency) {
     row.reference,
     id
   );
-  const reason = firstText(row.reason, row.creditReason).toUpperCase();
+  const reasonText = firstText(row.reason, row.creditReason);
+  const reason = reasonText.toUpperCase();
+  const sourceCancellation = row.sourceCancellation
+    && typeof row.sourceCancellation === 'object'
+    && !Array.isArray(row.sourceCancellation)
+    ? row.sourceCancellation
+    : {};
+  const cancellation = row.cancellation
+    && typeof row.cancellation === 'object'
+    && !Array.isArray(row.cancellation)
+    ? row.cancellation
+    : {};
+  const cancellationId = firstText(
+    row.cancellationId,
+    row.sourceCancellationId,
+    sourceCancellation.id,
+    cancellation.id
+  );
+  const sourceCancellationNumber = firstText(
+    row.cancellationNumber,
+    row.sourceCancellationNumber,
+    row.cancellationNo,
+    sourceCancellation.cancellationNumber,
+    sourceCancellation.number,
+    cancellation.cancellationNumber,
+    cancellation.number
+  );
   const appliedInstallment = row.appliedInstallment
     && typeof row.appliedInstallment === 'object'
     && !Array.isArray(row.appliedInstallment)
@@ -275,7 +390,10 @@ function normalizeCreditNote(row, fallbackCurrency) {
     amount: firstDefined(row.amount, row.creditAmount, row.creditNoteAmount, row.totalAmount),
     currency: firstText(row.currency, row.currencyCode, fallbackCurrency).toUpperCase(),
     reason,
-    reasonLabel: creditNoteReasonLabel(reason),
+    reasonLabel: creditNoteReasonLabel(reasonText),
+    cancellationId,
+    cancellationNumber: sourceCancellationNumber,
+    sourceCancellationNumber,
     status: firstText(row.status).toUpperCase() || 'DRAFT',
     issuedDate: dateOnly(firstDefined(
       row.issuedDate,

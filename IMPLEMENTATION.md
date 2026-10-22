@@ -113,11 +113,14 @@ Credit notes sit at the bottom of the Billing tab, after the installments. The
 section reads `GET /api/v1/policies/{policyId}/credit-notes` alongside the
 billing plan and renders an issued total (ISSUED + APPLIED notes) and an applied
 total (APPLIED notes), plus a table of note number, amount/currency, reason,
-status, issued date, applied date, reversal date/reason, and the applied
-installment number/ID when the read carries one. An empty ledger is the section's
-empty state, not an unavailable tab. `New credit note` opens a modal whose amount
-defaults to the unpaid premium and whose currency is fixed to the policy premium
-currency; `Save draft` posts `{amount, currency, reason}` to
+source cancellation number, status, issued date, applied date, reversal
+date/reason, and the applied installment number/ID when the read carries one.
+The source cancellation number comes from the note read when it carries one;
+otherwise the Billing tab quietly reads the cancellation list to resolve the
+stored cancellation id. An empty ledger is the section's empty state, not an
+unavailable tab. `New credit note` opens a modal whose amount defaults to the
+unpaid premium and whose currency is fixed to the policy premium currency;
+`Save draft` posts `{amount, currency, reason}` to
 `POST /api/v1/policies/{policyId}/credit-notes` with an `Idempotency-Key`.
 `Issue` (DRAFT) and `Cancel` (DRAFT/ISSUED, after an inline confirmation) PATCH
 `{status}` to
@@ -134,6 +137,20 @@ the modal with the canonical problem and re-reads the ledger and billing plan so
 a stale target is not offered again. Credit notes reduce premium owed; they do not
 change the policy premium, coverage, limits, or version, and applying or
 reversing a note is an accounting status, not a Payment.
+
+The Cancellation tab lists the policy's cancellations and reads the credit-note
+ledger with them. A `POSTED` cancellation whose `returnPremiumAmount` is greater
+than zero offers `Create credit note`; once a ledger note carries a matching
+`cancellationId`, the row instead shows `Credit note created` linking to the
+Billing ledger. The action opens the same credit-note dialog prefilled from the
+cancellation: the amount is the return premium and read-only, the currency is
+the cancellation/policy premium currency and read-only, the reason is the
+read-only sentence `Cancellation <number> return premium`, and the source
+cancellation number and id are shown as locked context. `Save draft` posts the
+same payload with `cancellationId`. A 409 duplicate stays in the dialog with the
+canonical problem and re-reads the ledger; a successful POST refreshes the
+ledger, closes the dialog, and the cancellation row switches to the created-note
+link.
 
 ## Structure
 
@@ -218,6 +235,11 @@ balances and REVERSED date/reason row, reverse 400/409 containment with a
 ledger/billing re-read, cancel confirmation for DRAFT and ISSUED notes, the
 section's contained read failure with retry, a create 409 that keeps the dialog
 open, and a status 409 that keeps the row unchanged and reloads the ledger;
+`tests/cancellation-credit-note.spec.js` covers the cancellation action's POSTED
+and positive-return-premium eligibility, the locked return-premium/currency/
+reason prefill and source cancellation context, the `cancellationId` POST
+payload and idempotency header, the created-note link and ledger source
+cancellation number, the existing-ledger link, and 409/500 containment;
 `tests/renewal.spec.js` covers action eligibility by status,
 modal term and premium/limit defaults, the renewal payload and headers, success
 selection and notice, the predecessor link and its navigation, and the 409

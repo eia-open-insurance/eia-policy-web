@@ -28,13 +28,18 @@ import {
   CREDIT_NOTE_REVERSAL_REASON_MAX,
   canApplyCreditNote,
   canCancelCreditNote,
+  canCreateCreditNoteForCancellation,
   canIssueCreditNote,
   canReverseCreditNote,
+  cancellationCreditNoteForm,
+  cancellationNumber,
   creditNoteAppliedInstallmentLabel,
   creditNoteEndpoint,
+  creditNoteForCancellation,
   creditNoteLabel,
   creditNotePayload,
   creditNoteReasonLabel,
+  creditNoteSourceCancellationLabel,
   creditNoteStatusEndpoint,
   creditNoteStatusPayload,
   creditNoteStatusTone,
@@ -351,12 +356,14 @@ export default function App() {
   const [insureds, setInsureds] = useState([]);
   const [locations, setLocations] = useState([]);
   const [cancellations, setCancellations] = useState([]);
+  const cancellationsRequestRef = useRef(0);
   const [reinstatements, setReinstatements] = useState([]);
   const [billing, setBilling] = useState(emptyBillingState);
   const billingRequestRef = useRef(0);
   const [creditNotes, setCreditNotes] = useState(emptyCreditNotesState);
   const creditNotesRequestRef = useRef(0);
   const [creditNoteOpen, setCreditNoteOpen] = useState(false);
+  const [creditNoteCancellation, setCreditNoteCancellation] = useState(null);
   const [creditNoteApply, setCreditNoteApply] = useState(null);
   const [creditNoteApplyError, setCreditNoteApplyError] = useState('');
   const [creditNoteReverse, setCreditNoteReverse] = useState(null);
@@ -609,7 +616,7 @@ export default function App() {
       setEndorsements([]);
       setInsureds([]);
       setLocations([]);
-      setCancellations([]);
+      clearCancellations();
       setReinstatements([]);
       clearBilling();
       setBillingForm(defaultBillingForm(detail.body));
@@ -770,6 +777,42 @@ export default function App() {
   }
 
   /**
+   * Cancellations are the source of return-premium credit notes. The tab needs
+   * them for its own table, and the Billing ledger reads them quietly to resolve
+   * a credit note's stored cancellation id to the cancellation number it shows.
+   * A failed quiet read never blocks the ledger or adds a page-level error.
+   */
+  async function loadCancellations(policyId = selected?.id, options = {}) {
+    const requestId = cancellationsRequestRef.current + 1;
+    cancellationsRequestRef.current = requestId;
+    if (!policyId) {
+      setCancellations([]);
+      return;
+    }
+    try {
+      const result = await api(
+        `/api/v1/policies/${policyId}/cancellations?page=0&size=50`
+      );
+      if (cancellationsRequestRef.current !== requestId) return;
+      if (!result.response.ok) {
+        if (!options.quiet) {
+          setError(problemMessage(result.body, 'Cancellation load failed'));
+        }
+        return;
+      }
+      setCancellations(pageItems(result.body));
+    } catch (e) {
+      if (cancellationsRequestRef.current !== requestId) return;
+      if (!options.quiet) setError(e.message);
+    }
+  }
+
+  function clearCancellations() {
+    cancellationsRequestRef.current += 1;
+    setCancellations([]);
+  }
+
+  /**
    * Credit notes are policy-level accounting documents read alongside the
    * billing plan. They keep their own request lifecycle so a slow or missing
    * credit-note read never hides the plan or the installments. A 404 during
@@ -817,6 +860,7 @@ export default function App() {
     creditNotesRequestRef.current += 1;
     setCreditNotes(emptyCreditNotesState());
     setCreditNoteOpen(false);
+    setCreditNoteCancellation(null);
     setCreditNoteApply(null);
     setCreditNoteApplyError('');
     setCreditNoteReverse(null);
@@ -1169,18 +1213,17 @@ export default function App() {
       } else if (tabId === 'billing') {
         await Promise.all([
           loadBilling(policyId, selected?.id === policyId ? selected.policy : null),
-          loadCreditNotes(policyId, selected?.id === policyId ? selected.policy : null)
+          loadCreditNotes(policyId, selected?.id === policyId ? selected.policy : null),
+          // Quiet: only used to render a credit note's source cancellation
+          // number; a missing cancellation read must not disturb the ledger.
+          loadCancellations(policyId, { quiet: true })
         ]);
       } else if (tabId === 'cancellation') {
-        const [cancellationResult, reinstatementResult] = await Promise.all([
-          api(`/api/v1/policies/${policyId}/cancellations?page=0&size=50`),
-          api(`/api/v1/policies/${policyId}/reinstatements?page=0&size=50`)
+        const [reinstatementResult] = await Promise.all([
+          api(`/api/v1/policies/${policyId}/reinstatements?page=0&size=50`),
+          loadCancellations(policyId),
+          loadCreditNotes(policyId, selected?.id === policyId ? selected.policy : null)
         ]);
-        if (!cancellationResult.response.ok) {
-          setError(problemMessage(cancellationResult.body, 'Cancellation load failed'));
-        } else {
-          setCancellations(pageItems(cancellationResult.body));
-        }
         if (!reinstatementResult.response.ok) {
           setError(problemMessage(reinstatementResult.body, 'Reinstatement load failed'));
         } else {
@@ -1239,6 +1282,7 @@ export default function App() {
     clearDocuments();
     clearActivity();
     clearBilling();
+    clearCancellations();
     setBillingForm(defaultBillingForm(null));
     setBillingInstallmentId(null);
     setLinkPaymentInstallment(null);
@@ -1690,22 +1734,58 @@ export default function App() {
   // ---- credit notes -------------------------------------------------
   function openCreditNoteForm() {
     setCreditNoteActionError('');
+    setCreditNoteCancellation(null);
+    setCreditNoteOpen(true);
+  }
+
+  /**
+   * A posted cancellation with a positive return premium can be settled by one
+   * credit note. The cancellation is handed to the shared dialog as the locked
+   * source; if the ledger already names it, the row links to that note instead.
+   */
+  function openCancellationCreditNote(cancellation) {
+    if (!selected || !canCreateCreditNoteForCancellation(cancellation)) return;
+    const existing = creditNoteForCancellation(creditNotes.items, cancellation.id);
+    if (existing) {
+      showCreditNoteLedger();
+      return;
+    }
+    setCreditNoteActionError('');
+    setNotice('');
+    setCreditNoteCancellation(cancellation);
     setCreditNoteOpen(true);
   }
 
   function closeCreditNoteForm() {
     setCreditNoteOpen(false);
+    setCreditNoteCancellation(null);
+  }
+
+  /** The cancellation row's "Credit note created" link opens the ledger. */
+  function showCreditNoteLedger() {
+    selectTab('billing');
   }
 
   /** POST saves the note as a DRAFT; issuing and applying are separate PATCHes. */
   function creditNoteCreated(resultBody) {
     const created = resultBody?.creditNote || resultBody;
     setCreditNoteOpen(false);
+    setCreditNoteCancellation(null);
     setCreditNoteActionError('');
     setNotice(`${creditNoteLabel(created)} saved as draft.`);
     if (selected?.id) {
       loadCreditNotes(selected.id, selected.policy).catch(() => {});
     }
+  }
+
+  /**
+   * A duplicate (409) means another operator already created the cancellation's
+   * note. The dialog keeps the canonical problem; re-reading the ledger also
+   * lets the cancellation row switch from Create to the existing note link.
+   */
+  async function refreshCreditNotesAfterConflict() {
+    if (!selected?.id) return;
+    await loadCreditNotes(selected.id, selected.policy);
   }
 
   /**
@@ -4945,6 +5025,7 @@ export default function App() {
                   <CreditNotesSection
                     policy={selectedPolicy}
                     state={creditNotes}
+                    cancellations={cancellations}
                     busyId={creditNoteBusyId}
                     cancelId={creditNoteCancelId}
                     actionError={creditNoteActionError}
@@ -4975,7 +5056,7 @@ export default function App() {
                     </span>
                   </div>
                   <div className="eia-table-wrap">
-                    <table className="eia-table">
+                    <table className="eia-table eia-cancellations-table" aria-label="Cancellations">
                       <thead>
                         <tr>
                           <th>Type</th>
@@ -4984,21 +5065,65 @@ export default function App() {
                           <th>Return premium</th>
                           <th>Pro-rata</th>
                           <th>Status</th>
+                          <th>Credit note</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {cancellations.map((cancellation) => (
-                          <tr key={cancellation.id}>
-                            <td>{cancellation.cancellationType}</td>
-                            <td>{cancellation.reason}</td>
-                            <td>{cancellation.effectiveDate}</td>
-                            <td>{formatMoney(cancellation.returnPremiumAmount, cancellation.premiumCurrency)}</td>
-                            <td>{formatPercent(cancellation.proRataPct)}</td>
-                            <td>{cancellation.status}</td>
-                          </tr>
-                        ))}
+                        {cancellations.map((cancellation) => {
+                          const sourceNote = creditNoteForCancellation(
+                            creditNotes.items,
+                            cancellation.id
+                          );
+                          return (
+                            <tr
+                              key={cancellation.id}
+                              data-testid={`cancellation-row-${cancellation.id}`}
+                            >
+                              <td>{cancellation.cancellationType}</td>
+                              <td>{cancellation.reason}</td>
+                              <td>{cancellation.effectiveDate}</td>
+                              <td>{formatMoney(cancellation.returnPremiumAmount, cancellation.premiumCurrency)}</td>
+                              <td>{formatPercent(cancellation.proRataPct)}</td>
+                              <td>{cancellation.status}</td>
+                              <td>
+                                {sourceNote ? (
+                                  <span
+                                    className="eia-cancellation-credit-note"
+                                    data-testid={`cancellation-credit-note-${cancellation.id}`}
+                                  >
+                                    <a
+                                      href="#credit-notes"
+                                      title="Open the credit note ledger"
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        showCreditNoteLedger();
+                                      }}
+                                    >
+                                      Credit note created
+                                    </a>
+                                    <span className="eia-muted">
+                                      {' · '}
+                                      <code className="eia-mono">
+                                        {creditNoteLabel(sourceNote)}
+                                      </code>
+                                    </span>
+                                  </span>
+                                ) : canCreateCreditNoteForCancellation(cancellation) ? (
+                                  <button
+                                    type="button"
+                                    className="eia-btn-secondary"
+                                    data-testid={`create-credit-note-${cancellation.id}`}
+                                    onClick={() => openCancellationCreditNote(cancellation)}
+                                  >
+                                    Create credit note
+                                  </button>
+                                ) : '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
                         {cancellations.length === 0 && (
-                          <tr><td className="eia-muted" colSpan={6}>No cancellations.</td></tr>
+                          <tr><td className="eia-muted" colSpan={7}>No cancellations.</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -5612,8 +5737,10 @@ export default function App() {
         <CreditNoteDialog
           policy={selectedPolicy}
           unpaidAmount={billing.summary?.outstandingAmount}
+          cancellation={creditNoteCancellation}
           onClose={closeCreditNoteForm}
           onCreated={creditNoteCreated}
+          onConflict={refreshCreditNotesAfterConflict}
         />
       )}
       {creditNoteApply && selectedPolicy && (
@@ -5762,6 +5889,7 @@ function BillingContextPanel() {
 function CreditNotesSection({
   policy,
   state,
+  cancellations,
   busyId,
   cancelId,
   actionError,
@@ -5851,6 +5979,7 @@ function CreditNotesSection({
                 <th>Note</th>
                 <th>Amount</th>
                 <th>Reason</th>
+                <th>Cancellation</th>
                 <th>Status</th>
                 <th>Issued</th>
                 <th>Applied</th>
@@ -5864,6 +5993,10 @@ function CreditNotesSection({
                 const busy = busyId === note.id;
                 const confirming = cancelId === note.id;
                 const appliedInstallment = creditNoteAppliedInstallmentLabel(note);
+                const sourceCancellation = creditNoteSourceCancellationLabel(
+                  note,
+                  cancellations
+                );
                 const reversed = note.status === 'REVERSED'
                   || Boolean(note.reversedDate)
                   || Boolean(note.reversedReason);
@@ -5881,6 +6014,16 @@ function CreditNotesSection({
                       ) : null}
                     </td>
                     <td>{note.reasonLabel || creditNoteReasonLabel(note.reason)}</td>
+                    <td>
+                      {sourceCancellation ? (
+                        <code
+                          className="eia-mono"
+                          data-testid={`credit-note-cancellation-${note.id}`}
+                        >
+                          {sourceCancellation}
+                        </code>
+                      ) : '—'}
+                    </td>
                     <td>
                       <span className={`eia-pill ${creditNoteStatusTone(note.status)}`}>
                         {note.status}
@@ -6038,14 +6181,28 @@ function CreditNotesSection({
 }
 
 /**
- * New credit notes are saved as drafts. The amount defaults to the unpaid
- * premium and stays editable; the currency is fixed to the policy premium
- * currency because the note reduces that receivable.
+ * A credit note is saved as a draft. From Billing the amount defaults to the
+ * unpaid premium and stays editable. From a posted cancellation the amount is
+ * the computed return premium and is locked to that cancellation, and the
+ * source cancellation number is written into the reason.
  */
-function CreditNoteDialog({ policy, unpaidAmount, onClose, onCreated }) {
-  const [form, setForm] = useState(() => defaultCreditNoteForm(policy, unpaidAmount));
+function CreditNoteDialog({
+  policy,
+  unpaidAmount,
+  cancellation,
+  onClose,
+  onCreated,
+  onConflict
+}) {
+  const [form, setForm] = useState(() => (
+    cancellation
+      ? cancellationCreditNoteForm(policy, cancellation)
+      : defaultCreditNoteForm(policy, unpaidAmount)
+  ));
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
+  const locked = Boolean(cancellation);
+  const sourceNumber = cancellationNumber(cancellation);
   const currency = policy?.premiumCurrency || form.currency || '';
 
   useEffect(() => {
@@ -6082,6 +6239,11 @@ function CreditNoteDialog({ policy, unpaidAmount, onClose, onCreated }) {
           result.body,
           `Credit note creation failed: ${result.response.status}`
         ));
+        // A 409 means another operator already created the cancellation's note;
+        // re-read the ledger so the source row can link to the existing note.
+        if (result.response.status === 409 && onConflict) {
+          await onConflict();
+        }
         return;
       }
       onCreated(result.body);
@@ -6107,16 +6269,36 @@ function CreditNoteDialog({ policy, unpaidAmount, onClose, onCreated }) {
           <span className="eia-badge">{policy.policyNumber}</span>
         </div>
         <p className="eia-modal-lede" id="credit-note-dialog-description">
-          Save a draft credit note against {policy.policyNumber}. Issuing and applying are
-          separate, audited status changes; no money moves and the policy premium is not edited.
+          {locked
+            ? `Save a return-premium draft credit note against ${policy.policyNumber} for `
+              + `posted cancellation ${sourceNumber}.`
+            : `Save a draft credit note against ${policy.policyNumber}.`}
+          {' '}Issuing and applying are separate, audited status changes; no money moves and the
+          policy premium is not edited.
         </p>
         <p
           className="eia-muted eia-modal-currency-context"
           data-testid="credit-note-default-context"
         >
           Policy premium {formatMoney(policy.premiumAmount, policy.premiumCurrency)}
-          {' · '}unpaid <b>{formatMoney(unpaidAmount, currency)}</b>
+          {' · '}{locked ? 'return premium' : 'unpaid'}{' '}
+          <b>
+            {formatMoney(
+              locked ? cancellation.returnPremiumAmount : unpaidAmount,
+              currency
+            )}
+          </b>
         </p>
+        {locked && (
+          <p
+            className="eia-muted eia-modal-currency-context"
+            data-testid="credit-note-cancellation-context"
+          >
+            Source cancellation <b>{sourceNumber}</b>
+            {' · '}status <b>{cancellation.status}</b>
+            {' · '}effective <b>{cancellation.effectiveDate || '—'}</b>
+          </p>
+        )}
 
         {formError && (
           <p role="alert" className="eia-modal-error" data-testid="credit-note-form-error">
@@ -6129,40 +6311,79 @@ function CreditNoteDialog({ policy, unpaidAmount, onClose, onCreated }) {
             <label htmlFor="credit-note-amount">Amount</label>
             <input
               id="credit-note-amount"
+              data-testid="credit-note-amount"
               type="number"
               min="0.01"
               step="0.01"
               value={form.amount}
-              onChange={(e) => update('amount', e.target.value)}
+              readOnly={locked}
+              aria-readonly={locked ? 'true' : undefined}
+              onChange={locked ? undefined : (e) => update('amount', e.target.value)}
               autoFocus
               required
             />
             <span className="eia-field-hint">
-              Defaults to the unpaid premium. The note reduces premium owed; it does not change
-              the policy premium.
+              {locked
+                ? 'Fixed to the posted cancellation return premium. The note reduces premium '
+                  + 'owed; it does not change the policy premium.'
+                : 'Defaults to the unpaid premium. The note reduces premium owed; it does not '
+                  + 'change the policy premium.'}
             </span>
           </div>
           <div className="eia-field">
             <label htmlFor="credit-note-currency">Currency</label>
             <input
               id="credit-note-currency"
+              data-testid="credit-note-currency"
               value={currency}
               readOnly
               aria-readonly="true"
             />
             <span className="eia-field-hint">Fixed to the policy premium currency.</span>
           </div>
+          {locked && (
+            <div className="eia-field">
+              <label htmlFor="credit-note-source-cancellation">Cancellation</label>
+              <input
+                id="credit-note-source-cancellation"
+                data-testid="credit-note-source-cancellation"
+                value={sourceNumber}
+                readOnly
+                aria-readonly="true"
+              />
+              <span className="eia-field-hint">
+                Source id <code className="eia-mono">{cancellation.id}</code>. Locked to this
+                posted cancellation.
+              </span>
+            </div>
+          )}
           <div className="eia-field">
             <label htmlFor="credit-note-reason">Reason</label>
-            <select
-              id="credit-note-reason"
-              value={form.reason}
-              onChange={(e) => update('reason', e.target.value)}
-            >
-              {CREDIT_NOTE_REASONS.map((entry) => (
-                <option key={entry.value} value={entry.value}>{entry.label}</option>
-              ))}
-            </select>
+            {locked ? (
+              <input
+                id="credit-note-reason"
+                data-testid="credit-note-reason"
+                value={form.reasonText}
+                readOnly
+                aria-readonly="true"
+              />
+            ) : (
+              <select
+                id="credit-note-reason"
+                data-testid="credit-note-reason"
+                value={form.reason}
+                onChange={(e) => update('reason', e.target.value)}
+              >
+                {CREDIT_NOTE_REASONS.map((entry) => (
+                  <option key={entry.value} value={entry.value}>{entry.label}</option>
+                ))}
+              </select>
+            )}
+            <span className="eia-field-hint">
+              {locked
+                ? 'Derived from the posted cancellation and sent with the note.'
+                : 'Optional accounting reason for the note.'}
+            </span>
           </div>
           <div className="eia-field span-3 eia-modal-actions">
             <button type="submit" data-testid="save-credit-note" disabled={saving}>
@@ -6185,6 +6406,13 @@ function CreditNoteDialog({ policy, unpaidAmount, onClose, onCreated }) {
           data-testid="credit-note-dialog-context"
         >
           <h4>What saving a draft does</h4>
+          {locked && (
+            <p>
+              <b>This note settles the posted cancellation.</b> The amount is the computed return
+              premium and the source cancellation id travels with the note, so the same
+              cancellation cannot create a second note.
+            </p>
+          )}
           <p>
             <b>The note starts in DRAFT.</b> It does not affect premium owed until it is issued,
             and it does not change the policy premium, coverage, limits, or version.

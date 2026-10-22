@@ -197,6 +197,12 @@ async function installMocks(page, options = {}) {
       await json(route, 200, billingBody(state.installments, state.summaryOverrides));
       return;
     }
+    if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}/cancellations`) {
+      // The Billing ledger reads cancellations quietly to resolve a note's
+      // source cancellation number. These billing scenarios have none.
+      await json(route, 200, { items: [] });
+      return;
+    }
     if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}/credit-notes`) {
       state.creditNoteGets += 1;
       if (state.readStatus >= 400) {
@@ -424,6 +430,7 @@ test('renders the credit note ledger after installments and summarises issued an
     'Note',
     'Amount',
     'Reason',
+    'Cancellation',
     'Status',
     'Issued',
     'Applied',

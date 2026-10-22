@@ -120,6 +120,10 @@ test('cancels and reinstates a policy with If-Match and Idempotency-Key', async 
       await json(route, 200, itemPage(cancellations));
       return;
     }
+    if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}/credit-notes`) {
+      await json(route, 200, { items: [] });
+      return;
+    }
     if (method === 'GET' && url.pathname === `/api/v1/policies/${POLICY_ID}/reinstatements`) {
       await json(route, 200, itemPage(reinstatements));
       return;

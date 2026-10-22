@@ -134,6 +134,19 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
 - Playwright coverage for the tab position and empty state, attach, detach,
   create, create validation/rejection, a missing assigned entity, a contained
   read failure with retry, and a 409 attach conflict with reload and retry.
+- Cancellation tab **Create credit note** action on every `POSTED` cancellation
+  with a positive return premium, opening the credit-note modal prefilled from
+  the cancellation: locked amount (return premium), locked policy currency, and
+  the `Cancellation <number> return premium` reason. When the ledger already
+  contains a note with the same `cancellationId`, the row shows **Credit note
+  created** with a link to the Billing ledger instead.
+- Cancellation credit-note POST includes the source `cancellationId`; success
+  refreshes the ledger and announces the saved draft, while a 409 duplicate stays
+  in the dialog with the canonical problem and re-reads the ledger.
+- Credit-note ledger shows the source cancellation number (from the note read or
+  the cancellation list) and Playwright coverage for the prefill, POST payload,
+  duplicate 409, generic error, existing-ledger link, and source cancellation
+  number.
 
 ### Changed
 

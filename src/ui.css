@@ -1003,12 +1003,27 @@ a.eia-btn-secondary.eia-billing-payment-link {
 .eia-credit-notes-empty p:last-child { margin-bottom: 0; }
 .eia-credit-notes-table td:nth-child(1),
 .eia-credit-notes-table th:nth-child(1),
-.eia-credit-notes-table td:nth-child(5),
-.eia-credit-notes-table th:nth-child(5),
+.eia-credit-notes-table td:nth-child(4),
+.eia-credit-notes-table th:nth-child(4),
 .eia-credit-notes-table td:nth-child(6),
 .eia-credit-notes-table th:nth-child(6),
 .eia-credit-notes-table td:nth-child(7),
-.eia-credit-notes-table th:nth-child(7) { white-space: nowrap; }
+.eia-credit-notes-table th:nth-child(7),
+.eia-credit-notes-table td:nth-child(8),
+.eia-credit-notes-table th:nth-child(8) { white-space: nowrap; }
+.eia-cancellations-table td:nth-child(7),
+.eia-cancellations-table th:nth-child(7) { white-space: nowrap; }
+.eia-cancellation-credit-note {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+}
+.eia-cancellation-credit-note a {
+  color: var(--eia-blue);
+  font-weight: 600;
+  text-decoration: none;
+}
+.eia-cancellation-credit-note a:hover { text-decoration: underline; }
 .eia-credit-note-actions {
   display: inline-flex;
   align-items: center;

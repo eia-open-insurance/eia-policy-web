@@ -215,6 +215,7 @@ export function normalizeReferral(raw) {
 
   const decidedAt = textValue(
     source.decidedAt,
+    source.referralDecidedAt,
     source.decisionAt,
     source.approvedAt,
     source.resolvedAt
@@ -237,6 +238,7 @@ export function normalizeReferral(raw) {
   const referral = {
     referralId: textValue(source.referralId, source.id),
     status: textValue(
+      source.referralDecision,
       source.status,
       source.referralStatus,
       source.state,
@@ -258,6 +260,7 @@ export function normalizeReferral(raw) {
     notes: textValue(source.notes, source.referralNotes, source.note),
     decidedBy: textValue(
       source.decidedBy,
+      source.referralDecidedBy,
       source.decidedById,
       source.decidedByPersonId,
       source.decisionBy,

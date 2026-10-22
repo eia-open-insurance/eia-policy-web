@@ -1386,8 +1386,8 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
                 </p>
                 <p>
                   <b>The referral workflow is separate from the status actions.</b> A referral
-                  records the reason, authority, directory decision owner, and notes. Approving or
-                  declining it resolves the referral only; the submission keeps its own status.
+                  records the reason, authority, directory decision owner, and notes. Approving keeps
+                  the submission REFERRED; declining also moves its lifecycle to DECLINED.
                 </p>
               </section>
             </>
@@ -1785,8 +1785,8 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
                 REFERRED; its applicant, product, limits, and premium are unchanged.
               </p>
               <p>
-                <b>Approve or decline resolves the referral only.</b> A declined referral does not
-                withdraw or decline the submission; choose that submission status action separately.
+                <b>Approval leaves the submission REFERRED; a decline also sets it DECLINED.</b>{' '}
+                Neither decision changes the requested terms or creates a policy.
               </p>
             </section>
           </div>

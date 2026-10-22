@@ -771,6 +771,20 @@ main [role="status"] {
 .eia-picker-option .status { font-size: 9px; color: #60758a; border: 1px solid #dce5ed; border-radius: 3px; padding: 1px 4px; }
 .eia-picker-empty { padding: 12px; color: var(--eia-muted); font-size: 11px; text-align: center; }
 .eia-picker-hint { font-size: 10px; color: #7a8d9f; }
+.eia-picker-manual { display: flex; align-items: center; gap: 6px; }
+.eia-picker-manual input { flex: 1; min-width: 0; }
+.eia-picker-manual button { white-space: nowrap; font-size: 10px !important; padding: 4px 6px !important; }
+.eia-picker-empty-action {
+  width: 100% !important;
+  background: #f7fafc !important;
+  border: 0 !important;
+  border-top: 1px solid #edf1f5 !important;
+  border-radius: 0 !important;
+  color: var(--eia-blue) !important;
+  font-size: 10px !important;
+  padding: 8px 10px !important;
+}
+.eia-picker-empty-action:hover { background: #eef5fb !important; }
 
 /* Process context and related records */
 .eia-context-panel {

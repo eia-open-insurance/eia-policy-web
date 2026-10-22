@@ -1,5 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { mockPartySearch, mockRelated, selectParty, PARTY_ID } from './support.js';
+import {
+  mockPartySearch,
+  mockProducts,
+  mockRelated,
+  selectParty,
+  selectProduct,
+  PARTY_ID
+} from './support.js';
 
 const TENANT = '11111111-1111-7111-8111-111111111111';
 const API = '**/api/v1/policies**';
@@ -66,6 +73,7 @@ async function json(route, status, body, headers = {}) {
 test.beforeEach(async ({ page }) => {
   await mockRelated(page);
   await mockPartySearch(page);
+  await mockProducts(page);
 });
 
 test('renders the operational record layout and creates a policy with an Idempotency-Key', async ({ page }) => {
@@ -146,6 +154,9 @@ test('renders the operational record layout and creates a policy with an Idempot
   await page.getByRole('button', { name: 'New policy' }).click();
   await expect(page.getByRole('region', { name: 'Create policy' })).toBeVisible();
 
+  await selectProduct(page, 'CGL');
+  await expect(page.getByTestId('product-picker-selected'))
+    .toContainText('Commercial General Liability');
   await selectParty(page);
   await expect(page.getByRole('link', { name: 'Open party record' }))
     .toHaveAttribute('href', `/party?record=${PARTY_ID}`);
@@ -156,6 +167,8 @@ test('renders the operational record layout and creates a policy with an Idempot
   await expect(page.getByRole('status')).toContainText('Created POL-2026-0000002');
   expect(idempotencyKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   expect(createBody.insuredPartyId).toBe(PARTY_ID);
+  expect(createBody.productCode).toBe('CGL');
+  expect(createBody).not.toHaveProperty('productLabel');
 });
 
 test('follows next and previous links from the page envelope', async ({ page }) => {
@@ -237,6 +250,7 @@ test('renders a canonical problem+json create failure', async ({ page }) => {
 
   await page.goto('/');
   await page.getByRole('button', { name: 'New policy' }).click();
+  await selectProduct(page, 'CGL');
   await selectParty(page);
   await page.getByRole('button', { name: 'Create policy' }).click();
 

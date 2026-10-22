@@ -9,6 +9,17 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
 ### Added
 
 - Repository baseline.
+- Predictive product picker shared by New policy and New submission: it reads
+  `GET /api/v1/products?q=&status=ACTIVE`, searches by product code or name,
+  shows the selected product code and catalog label, and sends only the
+  `productCode` on create. An empty or unavailable catalog falls back to manual
+  code entry so both create flows stay usable.
+- Read-only Product catalog workspace tab over the active catalog, with a
+  server-side search by code or name and a detail panel for the selected
+  product.
+- Playwright coverage for product picker search/selection/payload, the manual
+  fallbacks for an empty and an unavailable catalog, and the catalog panel's
+  list, search, and detail.
 - Policy web remote: React 19 workbench, Webpack 5 Module Federation (`eia_policy` / `./App`), dev proxy to the domain, and a Playwright test with a mocked API.
 - Paginated envelope handling with previous/next controls and a total counter.
 - `Idempotency-Key` on create with replay notice.

@@ -2,8 +2,10 @@ import { test, expect } from '@playwright/test';
 import {
   mockPartyDetail,
   mockPartySearch,
+  mockProducts,
   mockRelated,
   selectParty,
+  selectProduct,
   PARTY_ID
 } from './support.js';
 
@@ -227,9 +229,7 @@ async function openFirstSubmission(page) {
 
 async function fillCreateForm(page, overrides = {}) {
   await selectParty(page);
-  if (overrides.productCode !== undefined) {
-    await page.getByLabel('Product code').fill(overrides.productCode);
-  }
+  await selectProduct(page, overrides.productCode || 'CGL');
   if (overrides.requestedEffectiveDate !== undefined) {
     await page.getByLabel('Requested effective date').fill(overrides.requestedEffectiveDate);
   }
@@ -251,6 +251,7 @@ test.beforeEach(async ({ page }) => {
   await mockRelated(page);
   await mockPartySearch(page);
   await mockPartyDetail(page);
+  await mockProducts(page);
 });
 
 test('lists the submission queue, filters it, and opens a detail with the applicant party link', async ({ page }) => {
@@ -396,6 +397,8 @@ test('creates a submission with an idempotency key and does not create a policy'
   });
   await expect(page.getByRole('link', { name: 'Open party record' }))
     .toHaveAttribute('href', `/party?record=${PARTY_ID}`);
+  await expect(page.getByTestId('product-picker-selected')).toContainText('Excess Liability');
+  await expect(page.getByTestId('product-picker-selected')).toContainText('EXCESS');
   await expect(page.getByLabel('Limit currency')).toHaveValue('USD');
 
   await page.getByRole('button', { name: 'Create submission' }).click();

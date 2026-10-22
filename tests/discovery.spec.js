@@ -1,5 +1,13 @@
 import { test, expect } from '@playwright/test';
-import { mockPartyDetail, mockRelated, PARTY, PARTY_ID, TENANT } from './support.js';
+import {
+  mockPartyDetail,
+  mockProducts,
+  mockRelated,
+  selectProduct,
+  PARTY,
+  PARTY_ID,
+  TENANT
+} from './support.js';
 
 const POLICY_ID = 'aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa';
 const OTHER_POLICY_ID = 'dddddddd-dddd-7ddd-8ddd-dddddddddddd';
@@ -225,11 +233,13 @@ test('resolves the insured party through the typeahead and submits insuredPartyI
     }
     await route.fulfill({ status: 404, body: 'unexpected route' });
   });
+  await mockProducts(page);
 
   await page.goto('/?new=1');
   const createRegion = page.getByRole('region', { name: 'Create policy' });
   await expect(createRegion).toBeVisible();
 
+  await selectProduct(page, 'CGL');
   await page.getByPlaceholder('Search by number or name…').fill('Acme');
   await page.getByRole('button', { name: /PTY-000000001/ }).click();
 
@@ -242,7 +252,9 @@ test('resolves the insured party through the typeahead and submits insuredPartyI
 
   await expect(page.getByRole('status')).toContainText('Created POL-2026-0000002');
   expect(createBody.insuredPartyId).toBe(PARTY_ID);
+  expect(createBody.productCode).toBe('CGL');
   expect(createBody).not.toHaveProperty('insuredPartyLabel');
+  expect(createBody).not.toHaveProperty('productLabel');
   expect(partyRequest.url.pathname).toBe('/api/v1/parties/search');
   expect(partyRequest.url.searchParams.get('q')).toBe('Acme');
   expect(partyRequest.url.searchParams.get('limit')).toBe('8');

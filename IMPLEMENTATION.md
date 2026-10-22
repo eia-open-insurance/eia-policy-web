@@ -8,6 +8,28 @@ detail with tabs for programs, legal entities, versions, coverages and limits,
 mass tort, endorsements, insureds and locations, billing,
 cancellation/reinstatement, and an event-derived activity timeline.
 
+## Products
+
+The active product catalog is read from `GET /api/v1/products?q=&status=ACTIVE`.
+`src/products.js` holds the endpoint, tolerant normalization (a bare array or an
+`items`/`products` envelope, `code`/`productCode`, and
+`name`/`productName`/`displayName`), status tone, and display labels.
+`src/ProductPicker.jsx` is the debounced, abortable typeahead shared by New
+policy and New submission: it searches by code or name, shows the selected
+product code and catalog label, and reports `(code, product)` to the form. Both
+forms store `productCode` for the command and keep the label only as display
+state, so no `productLabel` member is sent. When the unfiltered catalog read
+returns no products, or the read fails, the picker switches to a manual code
+input and states the reason. A filtered read with no matches keeps the search
+input so the operator can keep typing, and offers a manual-entry action.
+
+The third workspace tab, **Product catalog**, reads the same active catalog with
+a server-side search and renders the active list plus the selected product's
+code, name, status, type, description, and id. It is read-only: the catalog is
+curated by the Policy domain and this slice exposes GET only. New policy starts
+with no product and validation requires a selection before submit; the
+submission create command already required its product code.
+
 ## Submissions
 
 The page has a second workspace tab, **Submissions**, for new-business
@@ -25,9 +47,10 @@ queue from an empty one. Pagination follows the `_links` envelope. A Party read
 failure leaves the short id (or stored label) and never blocks the queue.
 
 `New submission` opens a modal over the same Party typeahead used by policy
-creation. The form records the applicant party, product code, requested
-effective date, requested limit and currency, comma-separated tort codes, and
-notes. `POST /api/v1/policies/submissions` sends
+creation. The form records the applicant party, product through the shared
+predictive product picker (search by code or name), requested effective date,
+requested limit and currency, comma-separated tort codes, and notes.
+`POST /api/v1/policies/submissions` sends
 `{applicantPartyId, productCode, requestedEffectiveDate, requestedLimitAmount,
 requestedLimitCurrency, tortCodes[], notes?}` with an `Idempotency-Key`; the
 notes member is omitted when blank. Response shapes with a flat record or a
@@ -358,6 +381,11 @@ payloads, form defaults and validation, status/type/label helpers, and tolerant
 normalization of the program read and list. `src/ProgramPicker.jsx` is the
 debounced, abortable program typeahead; it only selects an existing program and
 never mutates the policy.
+`src/products.js` holds the active product catalog endpoint, tolerant list and
+record normalization, status tone, and display labels; `src/ProductPicker.jsx`
+is the debounced, abortable product typeahead shared by the two create forms,
+with the empty/unavailable-catalog manual fallback. `src/ProductCatalog.jsx` is
+the read-only Product catalog tab.
 `src/legalEntities.js` holds the legal-entity type catalog, endpoints, create and
 attach payloads, form validation, status/type/label helpers, and tolerant
 normalization of the entity read and list (catalog names such as `entityCode`,
@@ -384,7 +412,12 @@ npm test
 
 `npm test` starts the Webpack dev server and runs Playwright with a mocked API.
 `tests/policy.spec.js` covers the page envelope, pagination, problem bodies, and
-ETag/If-Match; `tests/coverage.spec.js` covers adding a coverage with limits and
+ETag/If-Match; `tests/product-catalog.spec.js` covers the shared product
+picker's search by code and name (including the `q`/`status=ACTIVE` query and
+tenant header), the selected-product card, the policy `productCode` payload
+without the display label, the empty- and unavailable-catalog manual fallbacks,
+and the read-only Product catalog panel's list, search, and detail;
+`tests/coverage.spec.js` covers adding a coverage with limits and
 applying aggregate erosion; `tests/endorsement.spec.js` covers issuing an
 endorsement, the new version row, and the `428 APPROVAL_REQUIRED` problem;
 `tests/activity.spec.js` covers the event timeline request path and tenant
@@ -489,6 +522,13 @@ failure with retry, and a 409 attach conflict that reloads and retries.
   published by a backend in this tree. Legal-entity relationships, organization
   units, and the capacity/coinsurance/fronting structures that reference the
   entity are not rendered.
+- The product pickers and the Product catalog tab consume
+  `GET /api/v1/products?q=&status=ACTIVE`, which has no backend in this tree.
+  The response is normalized defensively (`items`/`products`, `code`/
+  `productCode`, `name`/`productName`/`displayName`). Product creation, editing,
+  status changes, and version history are not rendered; the panel is read-only,
+  and the forms fall back to manual code entry when the catalog is empty or
+  unavailable.
 - No optimistic UI or offline queue; every mutation waits for the domain.
 - The remote does not read the field-usage manifest or the theme/UI-kit packages
   from `eia-frontend`.

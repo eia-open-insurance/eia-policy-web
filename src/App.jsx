@@ -2,10 +2,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import ActivityTimeline, { activityEndpoint, sortActivityItems } from './ActivityTimeline.jsx';
 import EntityPicker from './EntityPicker.jsx';
 import LegalEntityPicker from './LegalEntityPicker.jsx';
+import ProductCatalog from './ProductCatalog.jsx';
+import ProductPicker from './ProductPicker.jsx';
 import ProgramPicker from './ProgramPicker.jsx';
 import SubmissionsWorkspace from './SubmissionsWorkspace.jsx';
 import CrossLink from './navigation.jsx';
 import { TENANT, api, newIdempotencyKey, pageItems, problemMessage, readJson } from './api.js';
+import { productLabel as productLabelFor } from './products.js';
 import { formatMoney } from './format.js';
 import {
   BILLING_FREQUENCIES,
@@ -222,7 +225,7 @@ function today() {
 function initialForm() {
   return {
     policyNumber: '',
-    productCode: 'CGL',
+    productCode: '',
     insuredPartyId: '',
     effectiveDate: isoDate(0),
     expirationDate: isoDate(1),
@@ -316,6 +319,7 @@ export default function App() {
   const [links, setLinks] = useState({});
   const [showCreate, setShowCreate] = useState(false);
   const [queueFilter, setQueueFilter] = useState('');
+  const [productLabel, setProductLabel] = useState('');
   const [insuredPartyLabel, setInsuredPartyLabel] = useState('');
   const [partyLabels, setPartyLabels] = useState({});
   const [related, setRelated] = useState({ claims: [], cessions: [], loading: false, error: '' });
@@ -502,6 +506,10 @@ export default function App() {
     event.preventDefault();
     setError('');
     setNotice('');
+    if (!String(form.productCode || '').trim()) {
+      setError('Select a product before creating the policy.');
+      return;
+    }
     if (!form.insuredPartyId) {
       setError('Select an insured party before creating the policy.');
       return;
@@ -510,6 +518,7 @@ export default function App() {
     try {
       const payload = {
         ...form,
+        productCode: String(form.productCode || '').trim(),
         policyNumber: form.policyNumber.trim() || undefined
       };
       const { response, body, replayed } = await api('/api/v1/policies', {
@@ -524,7 +533,8 @@ export default function App() {
       setNotice(replayed
         ? `Idempotent replay: returned ${body?.policyNumber || 'the original policy'}.`
         : `Created ${body?.policyNumber || 'policy'}.`);
-      setForm((current) => ({ ...current, policyNumber: '' }));
+      setForm((current) => ({ ...current, policyNumber: '', productCode: '' }));
+      setProductLabel('');
       setShowCreate(false);
       await load(0);
     } catch (e) {
@@ -3103,6 +3113,21 @@ export default function App() {
         >
           Submissions
         </button>
+        <button
+          type="button"
+          role="tab"
+          id="workspace-tab-products"
+          className={`eia-tab${workspaceTab === 'products' ? ' active' : ''}`}
+          aria-selected={workspaceTab === 'products'}
+          aria-controls="workspace-panel-products"
+          onClick={() => {
+            setWorkspaceTab('products');
+            setError('');
+            setNotice('');
+          }}
+        >
+          Product catalog
+        </button>
       </nav>
 
       {workspaceTab === 'policies' && (
@@ -3158,14 +3183,20 @@ export default function App() {
               />
             </div>
             <div className="eia-field">
-              <label htmlFor="create-product-code">Product code</label>
-              <input
-                id="create-product-code"
-                placeholder="CGL"
+              <label htmlFor="create-product">Product</label>
+              <ProductPicker
+                id="create-product"
                 value={form.productCode}
-                onChange={(e) => update('productCode', e.target.value)}
-                required
+                valueLabel={productLabel}
+                onChange={(code, product) => {
+                  setForm((current) => ({ ...current, productCode: code || '' }));
+                  setProductLabel(product ? productLabelFor(product) : '');
+                }}
               />
+              <span className="eia-field-hint">
+                Search the active product catalog by code or name. If the catalog is empty,
+                enter the code manually.
+              </span>
             </div>
             <div className="eia-field span-2">
               <label>Insured party</label>
@@ -7094,6 +7125,16 @@ export default function App() {
           aria-labelledby="workspace-tab-submissions"
         >
           <SubmissionsWorkspace onPolicyConverted={handleSubmissionConverted} />
+        </div>
+      )}
+
+      {workspaceTab === 'products' && (
+        <div
+          role="tabpanel"
+          id="workspace-panel-products"
+          aria-labelledby="workspace-tab-products"
+        >
+          <ProductCatalog />
         </div>
       )}
     </main>

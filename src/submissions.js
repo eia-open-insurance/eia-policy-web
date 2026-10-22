@@ -252,7 +252,7 @@ function todayIso() {
 export function defaultSubmissionForm() {
   return {
     applicantPartyId: '',
-    productCode: 'CGL',
+    productCode: '',
     requestedEffectiveDate: todayIso(),
     requestedLimitAmount: '2000000.00',
     requestedLimitCurrency: 'USD',
@@ -266,7 +266,7 @@ export function validateSubmissionForm(form) {
     return 'Select the applicant party before creating the submission.';
   }
   if (!String(form.productCode || '').trim()) {
-    return 'Enter the product code.';
+    return 'Select a product before creating the submission.';
   }
   if (!String(form.requestedEffectiveDate || '').trim()) {
     return 'Choose the requested effective date.';

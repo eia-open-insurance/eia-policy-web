@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import CrossLink, { navigateTo } from './navigation.jsx';
 import EntityPicker from './EntityPicker.jsx';
+import ProductPicker from './ProductPicker.jsx';
 import { api, newIdempotencyKey, problemMessage } from './api.js';
 import { formatMoney } from './format.js';
 import { partyEndpoint, partyRecordLabel } from './party.js';
+import { productLabel as productLabelFor } from './products.js';
 import {
   MAX_SUBMISSION_NOTES_LENGTH,
   SUBMISSION_STATUSES,
@@ -94,6 +96,7 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState(defaultSubmissionForm);
   const [applicantLabel, setApplicantLabel] = useState('');
+  const [productLabel, setProductLabel] = useState('');
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const [action, setAction] = useState(null);
@@ -234,6 +237,7 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
   function openCreateDialog() {
     setForm(defaultSubmissionForm());
     setApplicantLabel('');
+    setProductLabel('');
     setFormError('');
     setCreateOpen(true);
     setNotice('');
@@ -309,6 +313,7 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
       setCreateOpen(false);
       setForm(defaultSubmissionForm());
       setApplicantLabel('');
+      setProductLabel('');
       setNotice(result.replayed
         ? `Idempotent replay: returned ${reference}. No policy was created.`
         : `Created ${reference}. No policy was created; submissions precede policies.`);
@@ -1035,14 +1040,20 @@ export default function SubmissionsWorkspace({ onPolicyConverted = null }) {
               )}
 
               <div className="eia-field">
-                <label htmlFor="submission-product-code">Product code</label>
-                <input
-                  id="submission-product-code"
-                  placeholder="CGL"
+                <label htmlFor="submission-product">Product</label>
+                <ProductPicker
+                  id="submission-product"
                   value={form.productCode}
-                  onChange={(event) => updateForm('productCode', event.target.value)}
-                  required
+                  valueLabel={productLabel}
+                  onChange={(code, product) => {
+                    setForm((current) => ({ ...current, productCode: code || '' }));
+                    setProductLabel(product ? productLabelFor(product) : '');
+                  }}
                 />
+                <span className="eia-field-hint">
+                  Search the active product catalog by code or name. The submission stores the
+                  selected product code. If the catalog is empty, enter the code manually.
+                </span>
               </div>
 
               <div className="eia-field">

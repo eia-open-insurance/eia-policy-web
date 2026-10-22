@@ -1,5 +1,29 @@
 export const TENANT = '11111111-1111-7111-8111-111111111111';
 export const PARTY_ID = 'bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb';
+export const PRODUCT_CGL_ID = '11111111-2222-7333-8444-555555555555';
+export const PRODUCT_EXCESS_ID = '66666666-7777-7888-8999-aaaaaaaaaaaa';
+
+export const PRODUCT_CGL = {
+  id: PRODUCT_CGL_ID,
+  productId: PRODUCT_CGL_ID,
+  code: 'CGL',
+  productCode: 'CGL',
+  name: 'Commercial General Liability',
+  productName: 'Commercial General Liability',
+  status: 'ACTIVE'
+};
+
+export const PRODUCT_EXCESS = {
+  id: PRODUCT_EXCESS_ID,
+  productId: PRODUCT_EXCESS_ID,
+  code: 'EXCESS',
+  productCode: 'EXCESS',
+  name: 'Excess Liability',
+  productName: 'Excess Liability',
+  status: 'ACTIVE'
+};
+
+export const PRODUCTS = [PRODUCT_CGL, PRODUCT_EXCESS];
 
 export const PARTY = {
   id: PARTY_ID,
@@ -63,6 +87,50 @@ export async function mockPartySearch(page, items = [PARTY]) {
 export async function selectParty(page, label = PARTY.label) {
   await page.getByPlaceholder('Search by number or name…').fill('Acme');
   await page.getByRole('button', { name: new RegExp(label) }).click();
+}
+
+/**
+ * Serves GET /api/v1/products?q=&status=ACTIVE for the policy and submission
+ * product pickers. The query filter mirrors the catalog so a spec can verify
+ * that searching by code or name reached the server and narrowed the options.
+ * Pass `items: []` to exercise the empty-catalog manual-code fallback, or a
+ * non-200 `status` to exercise the unavailable-catalog fallback.
+ */
+export async function mockProducts(page, { items = PRODUCTS, status = 200, onRequest } = {}) {
+  await page.route('**/api/v1/products**', async (route) => {
+    const url = new URL(route.request().url());
+    if (onRequest) onRequest({ url, headers: route.request().headers() });
+    if (status !== 200) {
+      await fulfillJson(route, status, {
+        status,
+        title: 'Product catalog unavailable',
+        detail: 'The product catalog is temporarily unavailable.',
+        code: 'PRODUCT_CATALOG_UNAVAILABLE',
+        retryable: true
+      });
+      return;
+    }
+    const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+    const filtered = q
+      ? items.filter((product) => `${product.code} ${product.name}`.toLowerCase().includes(q))
+      : items;
+    await fulfillJson(route, 200, {
+      items: filtered,
+      page: 0,
+      size: filtered.length,
+      total: filtered.length
+    });
+  });
+}
+
+/**
+ * Drives the ProductPicker typeahead and selects a catalog product. The
+ * picker's first focus reads the unfiltered active catalog, so the option
+ * appears without typing.
+ */
+export async function selectProduct(page, code = 'CGL') {
+  await page.getByPlaceholder('Search products by code or name…').click();
+  await page.getByRole('option', { name: new RegExp(code) }).click();
 }
 
 /**

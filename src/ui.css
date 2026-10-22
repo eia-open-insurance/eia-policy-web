@@ -973,9 +973,10 @@ main tr.eia-billing-overdue-row td:first-child {
 .eia-billing-payment-review-summary b { color: #5c3f00; }
 .eia-billing-payment-review {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: flex-start;
+  flex-basis: 100%;
+  gap: 4px;
   margin-top: 4px;
 }
 .eia-billing-payment-review-badge {

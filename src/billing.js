@@ -242,6 +242,20 @@ export function normalizeBilling(body, policy) {
     summaryBody.totalCredited,
     summaryBody.credited
   );
+  // A server may publish credits on the plan rather than the summary (or only
+  // there while a rollout is incomplete). They are context for the premium
+  // variance, so the plan carries the canonical credited total as well.
+  const planCredited = numeric(firstDefined(
+    plan?.creditedAmount,
+    plan?.totalCreditedAmount,
+    plan?.creditedTotalAmount,
+    plan?.creditedTotal,
+    plan?.totalCredited,
+    plan?.credited
+  ));
+  const knownPlanCredited = planCredited !== null && planCredited > 0
+    ? planCredited
+    : null;
   const outstanding = firstDefined(
     summaryBody.outstandingAmount,
     summaryBody.totalOutstandingAmount,
@@ -269,10 +283,13 @@ export function normalizeBilling(body, policy) {
   const creditedNumber = numeric(credited) ?? (
     rowCreditedTotal > 0
       ? rowCreditedTotal
-      : outstandingNumber !== null && totalNumber !== null
-        ? Math.max(totalNumber - paidNumber - waivedNumber - outstandingNumber, 0)
-        : 0
+      : knownPlanCredited !== null
+        ? knownPlanCredited
+        : outstandingNumber !== null && totalNumber !== null
+          ? Math.max(totalNumber - paidNumber - waivedNumber - outstandingNumber, 0)
+          : 0
   );
+  if (plan) plan.creditedAmount = decimalString(creditedNumber);
   const computedOutstanding = totalNumber === null
     ? null
     : Math.max(totalNumber - paidNumber - waivedNumber - creditedNumber, 0);
@@ -344,24 +361,37 @@ export function amountToCents(value) {
 }
 
 /**
- * Compares the selected policy's written premium with the billing plan's
- * scheduled total. Both sides must be present; a missing amount is not a
- * variance, it is an unanswerable comparison. Amounts are compared at cent
- * precision so a decimal-column remainder never raises a false warning. The
- * result is a display-ready difference, not a command: a premium audit or
- * endorsement never rewrites the collection schedule.
+ * Compares the selected policy's written premium with the billing plan's net
+ * premium: the scheduled total less credits applied, floored at zero. Credits
+ * reduce the plan's collectible premium, so a credit that follows a premium
+ * reduction lets the two sides align instead of leaving a phantom variance.
+ * Both sides must be present; a missing amount is not a variance, it is an
+ * unanswerable comparison. Amounts are compared at cent precision so a
+ * decimal-column remainder never raises a false warning. The result is a
+ * display-ready difference, not a command: a premium audit or endorsement
+ * never rewrites the collection schedule.
  */
 export function billingPremiumVariance(policy, plan) {
   const policyCents = amountToCents(policy?.premiumAmount);
-  const planCents = amountToCents(plan?.totalPremiumAmount);
-  if (policyCents === null || planCents === null) return null;
-  const deltaCents = policyCents - planCents;
+  const grossPlanCents = amountToCents(plan?.totalPremiumAmount);
+  if (policyCents === null || grossPlanCents === null) return null;
+  const creditedCents = Math.max(amountToCents(plan?.creditedAmount) ?? 0, 0);
+  // A plan can be credited beyond its scheduled total, but its net premium
+  // cannot go below zero.
+  const netPlanCents = Math.max(grossPlanCents - creditedCents, 0);
+  const deltaCents = policyCents - netPlanCents;
   return {
     policyCents,
-    planCents,
+    // The compared plan side is always net of credits; gross and credited are
+    // kept separately for the warning's context sentence.
+    planCents: netPlanCents,
+    grossPlanCents,
+    creditedCents,
+    netPlanCents,
     deltaCents,
     differenceCents: Math.abs(deltaCents),
     differs: deltaCents !== 0,
+    hasCredits: creditedCents > 0,
     direction: deltaCents === 0 ? 'EQUAL' : deltaCents > 0 ? 'POLICY_HIGHER' : 'PLAN_HIGHER'
   };
 }

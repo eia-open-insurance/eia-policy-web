@@ -915,7 +915,7 @@ test('reports a create conflict when a plan already exists', async ({ page }) =>
   expect(state.billingGets).toBe(2);
 });
 
-test('warns when the policy premium is above the billing plan total', async ({ page }) => {
+test('warns when the policy premium is above the net billing plan premium', async ({ page }) => {
   await installMocks(page, {
     plan: { ...PLAN, totalPremiumAmount: '100000.00' },
     installments: [installment(1)]
@@ -925,14 +925,14 @@ test('warns when the policy premium is above the billing plan total', async ({ p
   const warning = page.getByTestId('billing-premium-variance');
   await expect(warning).toBeVisible();
   await expect(page.getByTestId('billing-premium-variance-message')).toHaveText(
-    'Policy premium $120,000.00 differs from the billing plan total $100,000.00 by $20,000.00.'
+    'Policy premium $120,000.00 differs from the billing plan net premium $100,000.00 by $20,000.00.'
   );
   await expect(warning).toContainText('does not automatically re-plan existing billing');
   await expect(warning.getByTestId('billing-premium-variance-action'))
     .toHaveText('Review premium audit');
 });
 
-test('warns when the policy premium is below the billing plan total', async ({ page }) => {
+test('warns when the policy premium is below the net billing plan premium', async ({ page }) => {
   await installMocks(page, {
     plan: { ...PLAN, totalPremiumAmount: '125000.50' },
     installments: [installment(1)]
@@ -940,7 +940,87 @@ test('warns when the policy premium is below the billing plan total', async ({ p
   await openBillingTab(page);
 
   await expect(page.getByTestId('billing-premium-variance-message')).toHaveText(
-    'Policy premium $120,000.00 differs from the billing plan total $125,000.50 by $5,000.50.'
+    'Policy premium $120,000.00 differs from the billing plan net premium $125,000.50 by $5,000.50.'
+  );
+});
+
+test('reduces the premium variance by the plan credits', async ({ page }) => {
+  await installMocks(page, {
+    plan: {
+      ...PLAN,
+      totalPremiumAmount: '130000.00',
+      creditedAmount: '5000.00'
+    },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-summary-credited')).toHaveText('$5,000.00');
+  await expect(page.getByTestId('billing-premium-variance-message')).toHaveText(
+    'Policy premium $120,000.00 differs from the billing plan net premium $125,000.00 by $5,000.00. Plan total $130,000.00 less credits $5,000.00.'
+  );
+});
+
+test('compares a partially credited plan at cent precision', async ({ page }) => {
+  await installMocks(page, {
+    plan: {
+      ...PLAN,
+      totalPremiumAmount: '125000.50',
+      creditedAmount: '2000.25'
+    },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-premium-variance-message')).toHaveText(
+    'Policy premium $120,000.00 differs from the billing plan net premium $123,000.25 by $3,000.25. Plan total $125,000.50 less credits $2,000.25.'
+  );
+});
+
+test('shows no variance warning when credits bring the net plan premium to the policy premium', async ({ page }) => {
+  await installMocks(page, {
+    plan: {
+      ...PLAN,
+      totalPremiumAmount: '125000.00',
+      creditedAmount: '5000.00'
+    },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-summary-credited')).toHaveText('$5,000.00');
+  await expect(page.getByTestId('billing-premium-variance')).toHaveCount(0);
+});
+
+test('floors a fully credited plan net premium at zero', async ({ page }) => {
+  await installMocks(page, {
+    plan: {
+      ...PLAN,
+      totalPremiumAmount: '100000.00',
+      creditedAmount: '100000.00'
+    },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-premium-variance-message')).toHaveText(
+    'Policy premium $120,000.00 differs from the billing plan net premium $0.00 by $120,000.00. Plan total $100,000.00 less credits $100,000.00.'
+  );
+});
+
+test('floors the net plan premium at zero when credits exceed the total', async ({ page }) => {
+  await installMocks(page, {
+    plan: {
+      ...PLAN,
+      totalPremiumAmount: '100000.00',
+      creditedAmount: '150000.00'
+    },
+    installments: [installment(1)]
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-premium-variance-message')).toHaveText(
+    'Policy premium $120,000.00 differs from the billing plan net premium $0.00 by $120,000.00. Plan total $100,000.00 less credits $150,000.00.'
   );
 });
 

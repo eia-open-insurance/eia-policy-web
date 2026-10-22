@@ -128,15 +128,20 @@ installment to the Payment workbench through
 Policy never posts a payment, and the plan never changes coverage or the policy
 version.
 
-When the selected policy's written premium and the billing plan's scheduled total
-are both present, the Billing tab compares them at cent precision. A difference
-shows `Policy premium $X differs from the billing plan total $Y by $Z.` with a
-note that a premium audit or endorsement changes written premium but does not
-automatically re-plan existing installments. The `Review premium audit` action
-switches to Endorsements and opens the audit dialog when the policy status
-allows it (otherwise it lands on the tab, where the unavailable reason is
-shown). A missing plan, or a missing amount on either side, is not a variance
-and renders no warning.
+When the selected policy's written premium and the billing plan's net premium
+are both present, the Billing tab compares them at cent precision. Net premium
+is the plan's scheduled total less credits applied, floored at zero so a fully
+or over-credited plan never compares against a negative amount. A difference
+shows `Policy premium $X differs from the billing plan net premium $Y by $Z.`
+with a note that a premium audit or endorsement changes written premium but
+does not automatically re-plan existing installments. When the plan carries
+credits, the warning appends `Plan total $T less credits $C.`; the plan's
+credited total is also carried through normalization from the summary or
+installment rows when the plan does not publish it. The `Review premium audit`
+action switches to Endorsements and opens the audit dialog when the policy
+status allows it (otherwise it lands on the tab, where the unavailable reason
+is shown). A missing plan, or a missing amount on either side, is not a
+variance and renders no warning.
 
 When an installment carries a `paymentId`, the Billing tab reads
 `GET /api/v1/payments/{id}` for each distinct linked payment and keeps that

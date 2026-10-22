@@ -2795,6 +2795,14 @@ export default function App() {
     || billing.plan?.currency
     || billing.summary?.currency
     || '';
+  const billingVarianceMessage = billingVariance?.differs
+    ? [
+      `Policy premium ${formatMoney(billingVariance.policyCents / 100, billingVarianceCurrency)} differs from the billing plan net premium ${formatMoney(billingVariance.netPlanCents / 100, billingVarianceCurrency)} by ${formatMoney(billingVariance.differenceCents / 100, billingVarianceCurrency)}.`,
+      billingVariance.hasCredits
+        ? `Plan total ${formatMoney(billingVariance.grossPlanCents / 100, billingVarianceCurrency)} less credits ${formatMoney(billingVariance.creditedCents / 100, billingVarianceCurrency)}.`
+        : ''
+    ].filter(Boolean).join(' ')
+    : '';
 
   return (
     <main>
@@ -5103,7 +5111,7 @@ export default function App() {
                             className="eia-billing-premium-variance-message"
                             data-testid="billing-premium-variance-message"
                           >
-                            {`Policy premium ${formatMoney(billingVariance.policyCents / 100, billingVarianceCurrency)} differs from the billing plan total ${formatMoney(billingVariance.planCents / 100, billingVarianceCurrency)} by ${formatMoney(billingVariance.differenceCents / 100, billingVarianceCurrency)}.`}
+                            {billingVarianceMessage}
                           </p>
                           <p className="eia-billing-copy">
                             A premium audit or endorsement changes the policy&apos;s written

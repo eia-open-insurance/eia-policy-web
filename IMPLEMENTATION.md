@@ -113,8 +113,8 @@ Credit notes sit at the bottom of the Billing tab, after the installments. The
 section reads `GET /api/v1/policies/{policyId}/credit-notes` alongside the
 billing plan and renders an issued total (ISSUED + APPLIED notes) and an applied
 total (APPLIED notes), plus a table of note number, amount/currency, reason,
-status, issued date, applied date, and the applied installment number/ID when
-the read carries one. An empty ledger is the section's
+status, issued date, applied date, reversal date/reason, and the applied
+installment number/ID when the read carries one. An empty ledger is the section's
 empty state, not an unavailable tab. `New credit note` opens a modal whose amount
 defaults to the unpaid premium and whose currency is fixed to the policy premium
 currency; `Save draft` posts `{amount, currency, reason}` to
@@ -124,11 +124,16 @@ currency; `Save draft` posts `{amount, currency, reason}` to
 `/api/v1/policies/{policyId}/credit-notes/{creditNoteId}/status`. `Apply`
 (ISSUED) opens a picker of DUE/OVERDUE installments whose outstanding is at
 least the note amount; `Apply credit note` sends `{status: "APPLIED",
-installmentId}` to the same status endpoint. A 400 or 409 is contained in the
-modal with the canonical problem and re-reads the ledger and billing plan so a
-stale target is not offered again. Credit notes reduce premium owed; they do not
-change the policy premium, coverage, limits, or version, and applying a note is
-an accounting status, not a Payment.
+installmentId}` to the same status endpoint. `Reverse` (APPLIED) opens a modal
+that requires an audit reason and warns that the credited amount is restored to
+the installment; `Reverse credit note` sends `{status: "REVERSED", reason}` to
+the same status endpoint. The row then shows REVERSED with the reversal date and
+reason, and the ledger and billing plan are re-read so the credited and
+outstanding balances reflect the restored credit. A 400 or 409 is contained in
+the modal with the canonical problem and re-reads the ledger and billing plan so
+a stale target is not offered again. Credit notes reduce premium owed; they do not
+change the policy premium, coverage, limits, or version, and applying or
+reversing a note is an accounting status, not a Payment.
 
 ## Structure
 
@@ -154,9 +159,10 @@ comparison for reconciliation, the link payload, and the credited/outstanding
 normalization that decides when the credit columns apply.
 `src/creditNotes.js` holds
 the credit-note reason catalog, form defaults and validation, the create and
-status (including apply installment) payloads, status/action rules, the eligible
-installment picker, the applied installment label, and tolerant normalization of
-the ledger read (including applied installment id/number) and its summary.
+status (including apply installment and required reversal reason) payloads,
+status/action rules, the eligible installment picker, the applied installment
+label, and tolerant normalization of the ledger read (including applied
+installment id/number and reversed date/reason) and its summary.
 `src/renewal.js`
 holds the pure renewal helpers: status eligibility and context, UTC-safe date
 arithmetic, the term/premium form defaults, payload construction, and
@@ -206,6 +212,9 @@ POST payload and idempotency header, the derived issued/applied totals, issue
 and apply transitions, the apply picker's DUE/OVERDUE and outstanding filter
 (partial and exact-full applications, empty picker), the `{status, installmentId}`
 apply payload, the applied installment column, apply 400/409 containment with a
+ledger/billing re-read, reversal's required-reason modal and restore warning,
+the `{status: "REVERSED", reason}` payload, the restored credited/outstanding
+balances and REVERSED date/reason row, reverse 400/409 containment with a
 ledger/billing re-read, cancel confirmation for DRAFT and ISSUED notes, the
 section's contained read failure with retry, a create 409 that keeps the dialog
 open, and a status 409 that keeps the row unchanged and reloads the ledger;

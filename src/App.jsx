@@ -25,9 +25,11 @@ import {
 } from './billing.js';
 import {
   CREDIT_NOTE_REASONS,
+  CREDIT_NOTE_REVERSAL_REASON_MAX,
   canApplyCreditNote,
   canCancelCreditNote,
   canIssueCreditNote,
+  canReverseCreditNote,
   creditNoteAppliedInstallmentLabel,
   creditNoteEndpoint,
   creditNoteLabel,
@@ -40,7 +42,8 @@ import {
   eligibleInstallmentsForCreditNote,
   emptyCreditNotesState,
   normalizeCreditNotes,
-  validateCreditNoteForm
+  validateCreditNoteForm,
+  validateCreditNoteReversalReason
 } from './creditNotes.js';
 import {
   ALLOCATION_METHODS,
@@ -356,6 +359,8 @@ export default function App() {
   const [creditNoteOpen, setCreditNoteOpen] = useState(false);
   const [creditNoteApply, setCreditNoteApply] = useState(null);
   const [creditNoteApplyError, setCreditNoteApplyError] = useState('');
+  const [creditNoteReverse, setCreditNoteReverse] = useState(null);
+  const [creditNoteReverseError, setCreditNoteReverseError] = useState('');
   const [creditNoteBusyId, setCreditNoteBusyId] = useState(null);
   const [creditNoteCancelId, setCreditNoteCancelId] = useState(null);
   const [creditNoteActionError, setCreditNoteActionError] = useState('');
@@ -814,6 +819,8 @@ export default function App() {
     setCreditNoteOpen(false);
     setCreditNoteApply(null);
     setCreditNoteApplyError('');
+    setCreditNoteReverse(null);
+    setCreditNoteReverseError('');
     setCreditNoteBusyId(null);
     setCreditNoteCancelId(null);
     setCreditNoteActionError('');
@@ -1811,6 +1818,70 @@ export default function App() {
 
   function keepCreditNote() {
     setCreditNoteCancelId(null);
+  }
+
+  /**
+   * Reversing undoes the credit posted by an APPLIED note. The note becomes
+   * REVERSED, the installment's credited balance is restored, and the ledger
+   * keeps the operator's audit reason. A 400/409 stays in the modal and re-reads
+   * both the ledger and the billing plan so the reversal is not offered twice.
+   */
+  function openCreditNoteReverse(creditNote) {
+    if (!creditNote?.id || !canReverseCreditNote(creditNote.status)) return;
+    setCreditNoteActionError('');
+    setCreditNoteReverseError('');
+    setCreditNoteReverse(creditNote);
+  }
+
+  function closeCreditNoteReverse() {
+    if (creditNoteBusyId) return;
+    setCreditNoteReverse(null);
+    setCreditNoteReverseError('');
+  }
+
+  async function reverseCreditNote(creditNote, reason) {
+    if (!selected || !creditNote?.id) return;
+    const reversalReason = String(reason || '').trim();
+    const validation = validateCreditNoteReversalReason(reversalReason);
+    if (validation) {
+      setCreditNoteReverseError(validation);
+      return;
+    }
+    setCreditNoteReverseError('');
+    setNotice('');
+    setCreditNoteBusyId(creditNote.id);
+    try {
+      const result = await api(
+        creditNoteStatusEndpoint(selected.id, creditNote.id),
+        {
+          method: 'PATCH',
+          body: creditNoteStatusPayload('REVERSED', null, reversalReason)
+        }
+      );
+      if (!result.response.ok) {
+        setCreditNoteReverseError(problemMessage(
+          result.body,
+          `Credit note reversal failed: ${result.response.status}`
+        ));
+        if ([400, 404, 409, 410, 412].includes(result.response.status)) {
+          await Promise.all([
+            loadCreditNotes(selected.id, selected.policy),
+            loadBilling(selected.id, selected.policy)
+          ]);
+        }
+        return;
+      }
+      setCreditNoteReverse(null);
+      setNotice(`${creditNoteLabel(creditNote)} reversed.`);
+      await Promise.all([
+        loadCreditNotes(selected.id, selected.policy),
+        loadBilling(selected.id, selected.policy)
+      ]);
+    } catch (e) {
+      setCreditNoteReverseError(e.message);
+    } finally {
+      setCreditNoteBusyId(null);
+    }
   }
 
   // ---- mass tort profile --------------------------------------------
@@ -4881,6 +4952,7 @@ export default function App() {
                     onNew={openCreditNoteForm}
                     onIssue={(creditNote) => updateCreditNoteStatus(creditNote, 'ISSUED')}
                     onApply={openCreditNoteApply}
+                    onReverse={openCreditNoteReverse}
                     onRequestCancel={requestCancelCreditNote}
                     onConfirmCancel={(creditNote) => (
                       updateCreditNoteStatus(creditNote, 'CANCELLED')
@@ -5556,6 +5628,17 @@ export default function App() {
           onApply={applyCreditNote}
         />
       )}
+      {creditNoteReverse && selectedPolicy && (
+        <ReverseCreditNoteDialog
+          policy={selectedPolicy}
+          creditNote={creditNoteReverse}
+          currency={billing.summary?.currency || selectedPolicy.premiumCurrency || ''}
+          busy={creditNoteBusyId === creditNoteReverse.id}
+          error={creditNoteReverseError}
+          onClose={closeCreditNoteReverse}
+          onReverse={reverseCreditNote}
+        />
+      )}
     </main>
   );
 }
@@ -5686,6 +5769,7 @@ function CreditNotesSection({
   onNew,
   onIssue,
   onApply,
+  onReverse,
   onRequestCancel,
   onConfirmCancel,
   onKeep
@@ -5770,6 +5854,7 @@ function CreditNotesSection({
                 <th>Status</th>
                 <th>Issued</th>
                 <th>Applied</th>
+                <th>Reversed</th>
                 <th>Installment</th>
                 <th>Action</th>
               </tr>
@@ -5779,8 +5864,12 @@ function CreditNotesSection({
                 const busy = busyId === note.id;
                 const confirming = cancelId === note.id;
                 const appliedInstallment = creditNoteAppliedInstallmentLabel(note);
+                const reversed = note.status === 'REVERSED'
+                  || Boolean(note.reversedDate)
+                  || Boolean(note.reversedReason);
                 const showActions = canIssueCreditNote(note.status)
                   || canApplyCreditNote(note.status)
+                  || canReverseCreditNote(note.status)
                   || canCancelCreditNote(note.status);
                 return (
                   <tr key={note.id} data-testid={`credit-note-row-${note.id}`}>
@@ -5799,6 +5888,26 @@ function CreditNotesSection({
                     </td>
                     <td>{note.issuedDate || '—'}</td>
                     <td>{note.appliedDate || '—'}</td>
+                    <td>
+                      {reversed ? (
+                        <span
+                          className="eia-credit-note-reversed-detail"
+                          data-testid={`reversed-credit-note-${note.id}`}
+                        >
+                          <span data-testid={`reversed-date-${note.id}`}>
+                            {note.reversedDate || '—'}
+                          </span>
+                          {note.reversedReason && (
+                            <span
+                              className="eia-credit-note-reversed-reason"
+                              data-testid={`reversed-reason-${note.id}`}
+                            >
+                              {note.reversedReason}
+                            </span>
+                          )}
+                        </span>
+                      ) : '—'}
+                    </td>
                     <td>
                       {appliedInstallment ? (
                         <span
@@ -5860,6 +5969,17 @@ function CreditNotesSection({
                               {busy ? 'Working…' : 'Apply'}
                             </button>
                           )}
+                          {canReverseCreditNote(note.status) && (
+                            <button
+                              type="button"
+                              className="eia-btn-secondary"
+                              data-testid={`reverse-credit-note-${note.id}`}
+                              disabled={busy}
+                              onClick={() => onReverse(note)}
+                            >
+                              {busy ? 'Working…' : 'Reverse'}
+                            </button>
+                          )}
                           {canCancelCreditNote(note.status) && (
                             <button
                               type="button"
@@ -5901,6 +6021,12 @@ function CreditNotesSection({
         <p>
           <b>Applying is an accounting status.</b> It records the credit against the receivable;
           it is not a Payment, does not move money, and is not approved here.
+        </p>
+        <p>
+          <b>Reversing restores the credit.</b> Reversing an applied note records the required
+          reason, puts the credited amount back on the installment it was posted to, and raises the
+          outstanding balance again. It undoes the accounting credit; it is not a refund or a
+          Payment.
         </p>
         <p>
           <b>Only issued notes credit anything.</b> A draft does not change premium owed, and
@@ -6257,6 +6383,158 @@ function ApplyCreditNoteDialog({
             <b>Only a covering installment is offered.</b> The note cannot be split across
             installments here, so its full amount must fit within the selected outstanding
             balance.
+          </p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Reversing an applied credit note restores the credit it posted to its
+ * installment. The operator must give a reason; the server owns the restored
+ * credited/outstanding balances and stamps the reversal date.
+ */
+function ReverseCreditNoteDialog({
+  policy,
+  creditNote,
+  currency,
+  busy,
+  error,
+  onClose,
+  onReverse
+}) {
+  const [reason, setReason] = useState('');
+  const [formError, setFormError] = useState('');
+  const noteCurrency = creditNote.currency || currency || '';
+  const installment = creditNoteAppliedInstallmentLabel(creditNote);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !busy) onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [busy, onClose]);
+
+  function submit(event) {
+    event.preventDefault();
+    if (busy) return;
+    const validation = validateCreditNoteReversalReason(reason);
+    if (validation) {
+      setFormError(validation);
+      return;
+    }
+    setFormError('');
+    onReverse(creditNote, reason.trim());
+  }
+
+  return (
+    <div className="eia-modal-backdrop">
+      <div
+        className="eia-modal eia-credit-note-reverse-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="credit-note-reverse-title"
+        aria-describedby="credit-note-reverse-description"
+        data-testid="credit-note-reverse-dialog"
+      >
+        <div className="eia-section-title" style={{ marginTop: 0 }}>
+          <h2 id="credit-note-reverse-title">
+            Reverse credit note {creditNoteLabel(creditNote)}
+          </h2>
+          <span className="eia-badge">{policy?.policyNumber}</span>
+        </div>
+        <p className="eia-modal-lede" id="credit-note-reverse-description">
+          Reversing marks this note REVERSED and restores the credit it posted. The policy
+          premium, coverage, limits, and version do not change, and no money moves.
+        </p>
+        <p
+          className="eia-muted eia-modal-currency-context"
+          data-testid="credit-note-reverse-context"
+        >
+          Note amount <b>{formatMoney(creditNote.amount, noteCurrency)}</b>
+          {' · '}status <b>{creditNote.status}</b>
+          {' · '}applied <b>{creditNote.appliedDate || '—'}</b>
+          {installment ? <>{' · '}installment <b>{installment}</b></> : null}
+        </p>
+
+        <div
+          className="eia-credit-note-reverse-warning"
+          role="note"
+          data-testid="credit-note-reverse-warning"
+        >
+          <b>This restores installment credit.</b>{' '}
+          {installment
+            ? `The ${formatMoney(creditNote.amount, noteCurrency)} credited to ${installment} `
+              + "is put back, so that installment's outstanding balance rises again. "
+            : `The ${formatMoney(creditNote.amount, noteCurrency)} credited to the installment `
+              + 'is put back, so the premium owed rises again. '}
+          The note becomes REVERSED, keeps this reason and the reversal date, and cannot be
+          applied again.
+        </div>
+
+        {formError && (
+          <p role="alert" className="eia-modal-error" data-testid="credit-note-reverse-form-error">
+            {formError}
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="eia-modal-error" data-testid="credit-note-reverse-error">
+            {error}
+          </p>
+        )}
+
+        <form onSubmit={submit}>
+          <div className="eia-field">
+            <label htmlFor="credit-note-reverse-reason">Reversal reason</label>
+            <textarea
+              id="credit-note-reverse-reason"
+              rows={3}
+              maxLength={CREDIT_NOTE_REVERSAL_REASON_MAX}
+              value={reason}
+              onChange={(e) => {
+                setReason(e.target.value);
+                setFormError('');
+              }}
+              aria-required="true"
+              aria-invalid={formError ? 'true' : 'false'}
+              autoFocus
+            />
+            <span className="eia-field-hint">
+              Required. The reason is kept on the credit note ledger with the reversal date.
+            </span>
+          </div>
+
+          <div className="eia-modal-actions">
+            <button type="submit" data-testid="confirm-reverse-credit-note" disabled={busy}>
+              {busy ? 'Reversing…' : 'Reverse credit note'}
+            </button>
+            <button
+              type="button"
+              className="eia-btn-secondary"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+
+        <section
+          className="eia-context-panel"
+          aria-label="Credit note reversal context"
+          data-testid="credit-note-reverse-context-panel"
+        >
+          <h4>What reversing does</h4>
+          <p>
+            <b>Restores the credited amount.</b> The installment the note was applied to records
+            the credit as removed, so its outstanding balance rises by the note amount. The policy
+            premium and scheduled installment amount stay unchanged.
+          </p>
+          <p>
+            <b>Closes the note as REVERSED.</b> The reversal date and the required reason stay on
+            the ledger. A reversal is an accounting correction, not a refund or a Payment.
           </p>
         </section>
       </div>

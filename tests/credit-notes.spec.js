@@ -277,6 +277,22 @@ async function installMocks(page, options = {}) {
           note.appliedInstallmentNumber = String(target.installmentNumber);
         }
       }
+      if (note.status === 'REVERSED') {
+        note.reversedDate = '2026-10-21';
+        note.reversedReason = body.reason;
+        const target = state.installments.find((row) => row.id === note.appliedInstallmentId);
+        if (target) {
+          const credited = Math.max(
+            Number(target.creditedAmount || 0) - Number(note.amount),
+            0
+          );
+          target.creditedAmount = credited.toFixed(2);
+          target.outstandingAmount = Math.max(
+            Number(target.amount) - credited,
+            0
+          ).toFixed(2);
+        }
+      }
       await json(route, 200, note);
       return;
     }
@@ -411,6 +427,7 @@ test('renders the credit note ledger after installments and summarises issued an
     'Status',
     'Issued',
     'Applied',
+    'Reversed',
     'Installment',
     'Action'
   ]);
@@ -559,6 +576,26 @@ function issuedNote(overrides = {}) {
     issuedDate: '2026-10-01',
     ...overrides
   });
+}
+
+function appliedNote(overrides = {}) {
+  return creditNote({
+    id: NOTE_ID,
+    status: 'APPLIED',
+    issuedDate: '2026-10-01',
+    appliedDate: '2026-10-05',
+    appliedInstallmentId: 'installment-1',
+    appliedInstallmentNumber: '1',
+    ...overrides
+  });
+}
+
+/** Billing rows already carrying the credit posted by `appliedNote()`. */
+function reversalInstallments() {
+  return [
+    installment(1, { creditedAmount: '25000.00', outstandingAmount: '5000.00' }),
+    installment(2)
+  ];
 }
 
 test('apply picker offers only open installments whose outstanding covers the note', async ({ page }) => {
@@ -745,6 +782,184 @@ test('contains a 400 apply rejection in the modal without changing the note', as
   await expect(row).toContainText('ISSUED');
   await expect(row).toContainText('2026-10-01');
   expect(state.creditNotePatches).toHaveLength(1);
+  expect(state.billingGets).toBe(2);
+});
+
+test('reverses an applied credit note with the required reason and a restore warning', async ({ page }) => {
+  const state = await installMocks(page, {
+    installments: reversalInstallments(),
+    notes: [appliedNote()]
+  });
+  await openBillingTab(page);
+
+  const row = page.getByTestId(`credit-note-row-${NOTE_ID}`);
+  await expect(row).toContainText('APPLIED');
+  await expect(row.getByTestId(`apply-credit-note-${NOTE_ID}`)).toHaveCount(0);
+  await expect(row.getByTestId(`cancel-credit-note-${NOTE_ID}`)).toHaveCount(0);
+  await row.getByTestId(`reverse-credit-note-${NOTE_ID}`).click();
+
+  const dialog = page.getByTestId('credit-note-reverse-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', {
+    name: `Reverse credit note ${NOTE_NUMBER}`
+  })).toBeVisible();
+  await expect(dialog.getByTestId('credit-note-reverse-context')).toContainText('$25,000.00');
+  await expect(dialog.getByTestId('credit-note-reverse-warning')).toContainText(
+    'This restores installment credit'
+  );
+  await expect(dialog.getByTestId('credit-note-reverse-warning')).toContainText('$25,000.00');
+  await expect(dialog.getByTestId('credit-note-reverse-warning')).toContainText(
+    'Installment 1'
+  );
+  await expect(dialog.getByRole('note')).toContainText('outstanding balance rises again');
+  await expect(dialog.getByTestId('credit-note-reverse-context-panel')).toContainText(
+    'not a refund or a Payment'
+  );
+
+  await dialog.getByLabel('Reversal reason').fill('Applied to the wrong installment');
+  await dialog.getByTestId('confirm-reverse-credit-note').click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText(`${NOTE_NUMBER} reversed.`);
+  expect(state.creditNotePatches).toHaveLength(1);
+  expect(state.creditNotePatches[0].path).toBe(
+    `/api/v1/policies/${POLICY_ID}/credit-notes/${NOTE_ID}/status`
+  );
+  expect(state.creditNotePatches[0].body).toEqual({
+    status: 'REVERSED',
+    reason: 'Applied to the wrong installment'
+  });
+});
+
+test('shows REVERSED status, reversed date/reason, and the restored installment credit', async ({ page }) => {
+  await installMocks(page, {
+    installments: reversalInstallments(),
+    notes: [appliedNote()]
+  });
+  await openBillingTab(page);
+
+  await expect(page.getByTestId('billing-summary-credited')).toHaveText('$25,000.00');
+  await expect(page.getByTestId('billing-summary-outstanding')).toHaveText('$95,000.00');
+  await expect(page.getByTestId('credited-installment-1')).toHaveText('$25,000.00');
+  await expect(page.getByTestId('outstanding-installment-1')).toHaveText('$5,000.00');
+
+  await page.getByTestId(`reverse-credit-note-${NOTE_ID}`).click();
+  const dialog = page.getByTestId('credit-note-reverse-dialog');
+  await dialog.getByLabel('Reversal reason').fill('Duplicate credit');
+  await dialog.getByTestId('confirm-reverse-credit-note').click();
+
+  const row = page.getByTestId(`credit-note-row-${NOTE_ID}`);
+  await expect(row).toContainText('REVERSED');
+  await expect(row).toContainText('2026-10-05');
+  await expect(row.getByTestId(`reversed-date-${NOTE_ID}`)).toHaveText('2026-10-21');
+  await expect(row.getByTestId(`reversed-reason-${NOTE_ID}`)).toHaveText('Duplicate credit');
+  await expect(row.getByTestId(`reversed-credit-note-${NOTE_ID}`)).toContainText(
+    '2026-10-21'
+  );
+  await expect(row.getByTestId(`applied-installment-${NOTE_ID}`)).toHaveText('Installment 1');
+  await expect(row.getByTestId(/^reverse-credit-note-/)).toHaveCount(0);
+
+  await expect(page.getByTestId('credit-notes-summary-applied')).toHaveText('$0.00');
+  await expect(page.getByTestId('billing-summary-credited')).toHaveText('$0.00');
+  await expect(page.getByTestId('billing-summary-outstanding')).toHaveText('$120,000.00');
+  await expect(page.getByTestId('credited-installment-1')).toHaveText('$0.00');
+  await expect(page.getByTestId('outstanding-installment-1')).toHaveText('$30,000.00');
+});
+
+test('requires a reversal reason and sends no PATCH when it is blank', async ({ page }) => {
+  const state = await installMocks(page, {
+    installments: reversalInstallments(),
+    notes: [appliedNote()]
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId(`reverse-credit-note-${NOTE_ID}`).click();
+  const dialog = page.getByTestId('credit-note-reverse-dialog');
+  const reason = dialog.getByLabel('Reversal reason');
+  await expect(reason).toHaveValue('');
+  await expect(reason).toHaveAttribute('aria-required', 'true');
+
+  await dialog.getByTestId('confirm-reverse-credit-note').click();
+
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId('credit-note-reverse-form-error')).toContainText(
+    'Enter a reason for the reversal.'
+  );
+  await expect(reason).toHaveAttribute('aria-invalid', 'true');
+  expect(state.creditNotePatches).toHaveLength(0);
+  await expect(page.getByTestId(`credit-note-row-${NOTE_ID}`)).toContainText('APPLIED');
+
+  await reason.fill('   ');
+  await dialog.getByTestId('confirm-reverse-credit-note').click();
+  await expect(dialog.getByTestId('credit-note-reverse-form-error')).toContainText(
+    'Enter a reason for the reversal.'
+  );
+  expect(state.creditNotePatches).toHaveLength(0);
+});
+
+test('keeps the reversal modal open on a 409 and re-reads the ledger and billing plan', async ({ page }) => {
+  const state = await installMocks(page, {
+    installments: reversalInstallments(),
+    notes: [appliedNote()],
+    patchStatus: 409,
+    patchError: problem(
+      409,
+      'Credit note CRN-2026-0000001 was already reversed by another user.',
+      'CREDIT_NOTE_CONFLICT'
+    )
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId(`reverse-credit-note-${NOTE_ID}`).click();
+  const dialog = page.getByTestId('credit-note-reverse-dialog');
+  await dialog.getByLabel('Reversal reason').fill('Duplicate credit');
+  await dialog.getByTestId('confirm-reverse-credit-note').click();
+
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId('credit-note-reverse-error')).toContainText(
+    'was already reversed by another user'
+  );
+  await expect(dialog.getByLabel('Reversal reason')).toHaveValue('Duplicate credit');
+  const row = page.getByTestId(`credit-note-row-${NOTE_ID}`);
+  await expect(row).toContainText('APPLIED');
+  await expect(row).not.toContainText('REVERSED');
+  await expect(row.getByTestId(`reverse-credit-note-${NOTE_ID}`)).toBeVisible();
+  await expect(page.getByTestId('billing-summary-credited')).toHaveText('$25,000.00');
+  expect(state.creditNotePatches).toHaveLength(1);
+  expect(state.creditNotePatches[0].body).toEqual({
+    status: 'REVERSED',
+    reason: 'Duplicate credit'
+  });
+  expect(state.creditNoteGets).toBe(2);
+  expect(state.billingGets).toBe(2);
+});
+
+test('contains a 400 reversal rejection in the modal without changing the note', async ({ page }) => {
+  const state = await installMocks(page, {
+    installments: reversalInstallments(),
+    notes: [appliedNote()],
+    patchStatus: 400,
+    patchError: problem(
+      400,
+      'The credit note is no longer applied and cannot be reversed.',
+      'CREDIT_NOTE_INVALID_STATUS'
+    )
+  });
+  await openBillingTab(page);
+
+  await page.getByTestId(`reverse-credit-note-${NOTE_ID}`).click();
+  const dialog = page.getByTestId('credit-note-reverse-dialog');
+  await dialog.getByLabel('Reversal reason').fill('Duplicate credit');
+  await dialog.getByTestId('confirm-reverse-credit-note').click();
+
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId('credit-note-reverse-error')).toContainText(
+    'no longer applied and cannot be reversed'
+  );
+  await expect(page.getByTestId(`credit-note-row-${NOTE_ID}`)).toContainText('APPLIED');
+  await expect(page.getByTestId('billing-summary-credited')).toHaveText('$25,000.00');
+  expect(state.creditNotePatches).toHaveLength(1);
+  expect(state.creditNoteGets).toBe(2);
   expect(state.billingGets).toBe(2);
 });
 

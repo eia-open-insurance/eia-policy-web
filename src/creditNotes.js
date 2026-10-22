@@ -14,9 +14,11 @@
  * `amount`, `currency`, a `reason`, a `status`, and the `issuedDate` and
  * `appliedDate` stamps. Applying an issued note also names the open installment
  * that absorbs it (`installmentId` on the PATCH, `appliedInstallmentId` and
- * `appliedInstallmentNumber` on the read). The list read may be a bare array, an
- * `{items}` page envelope, or a `{creditNotes: …}` wrapper; the summary may be
- * supplied by the server or derived from the rows.
+ * `appliedInstallmentNumber` on the read). An APPLIED note can be reversed with
+ * an audit reason: the PATCH sends `{status: "REVERSED", reason}` and the read
+ * then carries the `reversedDate` and `reversedReason` stamps. The list read may
+ * be a bare array, an `{items}` page envelope, or a `{creditNotes: …}` wrapper;
+ * the summary may be supplied by the server or derived from the rows.
  */
 
 import { canManageInstallment } from './billing.js';
@@ -34,11 +36,14 @@ const REASON_LABELS = Object.fromEntries(
   CREDIT_NOTE_REASONS.map((entry) => [entry.value, entry.label])
 );
 
+export const CREDIT_NOTE_REVERSAL_REASON_MAX = 500;
+
 export const CREDIT_NOTE_STATUS = {
   DRAFT: 'DRAFT',
   ISSUED: 'ISSUED',
   APPLIED: 'APPLIED',
-  CANCELLED: 'CANCELLED'
+  CANCELLED: 'CANCELLED',
+  REVERSED: 'REVERSED'
 };
 
 export function emptyCreditNotesState() {
@@ -58,12 +63,15 @@ export function creditNoteStatusEndpoint(policyId, creditNoteId) {
 
 /**
  * Issuing and cancelling send only the target status. Applying also names the
- * open installment that receives the credit; the server owns the credited and
- * outstanding balances that result from it.
+ * open installment that receives the credit; reversing sends the audit reason
+ * that explains why the posted credit was restored. The server owns the
+ * credited and outstanding balances that result from either transition.
  */
-export function creditNoteStatusPayload(status, installmentId) {
+export function creditNoteStatusPayload(status, installmentId, reason) {
   const payload = { status: String(status || '').toUpperCase() };
   if (installmentId) payload.installmentId = String(installmentId);
+  const reversalReason = String(reason || '').trim();
+  if (reversalReason) payload.reason = reversalReason;
   return payload;
 }
 
@@ -127,6 +135,24 @@ export function canCancelCreditNote(status) {
   return normalized === CREDIT_NOTE_STATUS.DRAFT || normalized === CREDIT_NOTE_STATUS.ISSUED;
 }
 
+/** Only an APPLIED note has a posted credit that can be undone. */
+export function canReverseCreditNote(status) {
+  return String(status || '').toUpperCase() === CREDIT_NOTE_STATUS.APPLIED;
+}
+
+/**
+ * A reversal must say why the credit was restored. The reason is free text kept
+ * on the ledger, so the check trims it and guards the payload length.
+ */
+export function validateCreditNoteReversalReason(reason) {
+  const text = String(reason || '').trim();
+  if (!text) return 'Enter a reason for the reversal.';
+  if (text.length > CREDIT_NOTE_REVERSAL_REASON_MAX) {
+    return `Reversal reason must be ${CREDIT_NOTE_REVERSAL_REASON_MAX} characters or fewer.`;
+  }
+  return '';
+}
+
 /** The installment an applied note names, when the read carries one. */
 export function creditNoteAppliedInstallmentLabel(creditNote) {
   const number = firstText(creditNote?.appliedInstallmentNumber);
@@ -172,6 +198,8 @@ export function creditNoteStatusTone(status) {
     case 'DRAFT':
       return 'amber';
     case 'CANCELLED':
+      return 'red';
+    case 'REVERSED':
       return 'red';
     case 'ISSUED':
       return 'blue';
@@ -236,6 +264,11 @@ function normalizeCreditNote(row, fallbackCurrency) {
     && !Array.isArray(row.appliedInstallment)
     ? row.appliedInstallment
     : {};
+  const reversal = row.reversal
+    && typeof row.reversal === 'object'
+    && !Array.isArray(row.reversal)
+    ? row.reversal
+    : {};
   return {
     id,
     creditNoteNumber: number,
@@ -258,6 +291,26 @@ function normalizeCreditNote(row, fallbackCurrency) {
       row.appliedAt,
       ''
     )),
+    reversedDate: dateOnly(firstDefined(
+      row.reversedDate,
+      row.reversedOn,
+      row.reversalDate,
+      row.reversedAt,
+      reversal.reversedDate,
+      reversal.reversedOn,
+      reversal.date,
+      reversal.reversedAt,
+      ''
+    )),
+    reversedReason: firstText(
+      row.reversedReason,
+      row.reversalReason,
+      row.reasonForReversal,
+      row.reversalNote,
+      reversal.reason,
+      reversal.reversedReason,
+      reversal.note
+    ),
     appliedInstallmentId: firstText(
       row.appliedInstallmentId,
       row.installmentId,

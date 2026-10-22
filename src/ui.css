@@ -1006,7 +1006,9 @@ a.eia-btn-secondary.eia-billing-payment-link {
 .eia-credit-notes-table td:nth-child(5),
 .eia-credit-notes-table th:nth-child(5),
 .eia-credit-notes-table td:nth-child(6),
-.eia-credit-notes-table th:nth-child(6) { white-space: nowrap; }
+.eia-credit-notes-table th:nth-child(6),
+.eia-credit-notes-table td:nth-child(7),
+.eia-credit-notes-table th:nth-child(7) { white-space: nowrap; }
 .eia-credit-note-actions {
   display: inline-flex;
   align-items: center;
@@ -1014,9 +1016,31 @@ a.eia-btn-secondary.eia-billing-payment-link {
   flex-wrap: wrap;
 }
 .eia-credit-note-confirm { font-size: 11px; font-weight: 600; color: var(--eia-red); }
+.eia-credit-note-reversed-detail { display: block; }
+.eia-credit-note-reversed-reason {
+  display: block;
+  margin-top: 2px;
+  max-width: 220px;
+  color: var(--eia-muted);
+  font-size: 10px;
+  white-space: normal;
+}
 .eia-modal.eia-credit-note-modal { width: min(720px, 100%); }
 .eia-credit-note-modal .eia-context-panel { margin-top: 16px; }
 .eia-modal.eia-credit-note-apply-modal { width: min(780px, 100%); }
+.eia-modal.eia-credit-note-reverse-modal { width: min(640px, 100%); }
+.eia-credit-note-reverse-warning {
+  margin: 14px 0 0;
+  padding: 11px 13px;
+  border: 1px solid #f0c9c9;
+  border-radius: 6px;
+  background: #fff7f7;
+  color: #7a2a2a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.eia-credit-note-reverse-warning b { color: #9d2b2b; }
+.eia-credit-note-reverse-modal .eia-field { margin-top: 14px; }
 .eia-credit-note-apply-empty { margin: 10px 0 0; padding: 18px; text-align: left; }
 .eia-credit-note-apply-empty p { margin: 0 0 6px; }
 .eia-credit-note-apply-empty p:last-child { margin-bottom: 0; }

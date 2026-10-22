@@ -8,6 +8,57 @@ detail with tabs for programs, legal entities, versions, coverages and limits,
 mass tort, endorsements, insureds and locations, billing,
 cancellation/reinstatement, and an event-derived activity timeline.
 
+## Submissions
+
+The page has a second workspace tab, **Submissions**, for new-business
+submissions that exist before a policy record. The list reads
+`GET /api/v1/policies/submissions?page=&size=` and renders the submission
+number, product code, requested effective date, status, requested limit, and the
+applicant party as a `/party?record=<id>` cross-link. The queue and detail use
+the Policy expert projection: `{submissionId, submissionNumber, tenantId,
+applicantPartyId, productCode, requestedEffectiveDate, requestedLimitAmount,
+requestedLimitCurrency, tortCodes[], notes, status, version, createdAt,
+updatedAt}`. The search box and status filter are evaluated over the loaded page
+and match number, applicant, status, product, requested effective date, limit,
+tort codes, and notes; the match count and empty state distinguish a filtered
+queue from an empty one. Pagination follows the `_links` envelope. A Party read
+failure leaves the short id (or stored label) and never blocks the queue.
+
+`New submission` opens a modal over the same Party typeahead used by policy
+creation. The form records the applicant party, product code, requested
+effective date, requested limit and currency, comma-separated tort codes, and
+notes. `POST /api/v1/policies/submissions` sends
+`{applicantPartyId, productCode, requestedEffectiveDate, requestedLimitAmount,
+requestedLimitCurrency, tortCodes[], notes?}` with an `Idempotency-Key`; the
+notes member is omitted when blank. Response shapes with a flat record or a
+`submission` wrapper are normalized. Validation requires the applicant, product
+code, requested effective date, a positive limit, and a three-letter currency.
+On success the modal closes, the queue reloads, the created submission is
+selected, and the notice states that no policy was created. A 400/422 problem
+stays in the modal with its canonical detail and field errors.
+
+Selecting a submission reads
+`GET /api/v1/policies/submissions/{submissionId}`. The detail panel shows the
+submission number and id, status, applicant party link, product code, requested
+effective date, requested limit and currency, tort codes, notes, received date,
+and last-updated timestamp. Only the actions allowed from the current status are
+rendered: `RECEIVED` can start clearance or withdraw; `CLEARANCE` can rate,
+refer, decline, or withdraw; `RATING` can quote, refer, decline, or withdraw;
+`REFERRED` can return to rating, quote, decline, or withdraw; `QUOTED` can bind,
+decline, or withdraw. `BOUND`, `DECLINED`, and `WITHDRAWN` are terminal. Each
+action opens a dialog with an optional reason and sends
+`PATCH /api/v1/policies/submissions/{submissionId}/status` with `{status,
+reason?}`; the reason is omitted when blank. Success updates the detail and
+queue and announces the move. A 400/409 stays in the dialog; a 409 re-reads the
+current submission. Detail **Refresh** re-reads both the submission and the
+queue, and a list read failure is contained with Retry.
+
+The context panels state that submissions precede policies, that a submission is
+the new-business opportunity and not a policy, and that quoting or binding a
+submission does not create a policy yet. Status actions update only the
+submission; this remote never creates, amends, quotes, or binds a policy from a
+submission.
+
 The Overview also carries a read-only related-notifications card. It reads
 `GET /api/v1/notifications?sourceType=POLICY&sourceId=<policyId>` and shows the
 total related count plus the three newest notifications by `createdAt`
@@ -385,7 +436,14 @@ failure with retry, and a 409 attach conflict that reloads and retries.
 ## Known SPEC gaps in this slice
 
 - Routing covers only the `?record=` and `?new=1` cross-links; there are no
-  per-section deep links.
+  per-section deep links. The workspace and submission selection are component
+  state, so a reload returns to the Policies tab.
+- The Submissions queue reads
+  `GET /api/v1/policies/submissions?page=&size=` and filters the loaded page in
+  the browser; it does not send `q` or `status` to the API, so a filtered result
+  describes the current page rather than the whole server-side queue. Submission
+  clearance results, rating worksheets, referrals, quotes, producers, documents,
+  and the submission-to-policy conversion are not rendered in this slice.
 - The predecessor policy cannot render a forward link to its successor because
   `PolicyDto` exposes only `renewedFromPolicyId`; the link is kept on the
   successor record.

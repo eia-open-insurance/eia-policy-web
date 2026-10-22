@@ -277,7 +277,7 @@ test('places the Program tab after Overview and shows the no-program state', asy
   await installMocks(page);
   await openProgramTab(page);
 
-  const tabs = page.getByRole('tab');
+  const tabs = page.getByRole('tablist', { name: 'Policy sections' }).getByRole('tab');
   await expect(tabs.nth(0)).toHaveText('Overview');
   await expect(tabs.nth(1)).toHaveText('Program');
 

@@ -1484,3 +1484,112 @@ a.eia-btn-secondary.eia-billing-payment-link {
   text-decoration: underline;
 }
 .eia-reinstatement-guard-remedy a:hover { color: #123f60; }
+
+/* Policy submissions: the new-business queue that precedes a policy record. */
+.eia-workspace-tabs { margin: 0 0 16px; }
+
+.eia-submission-context { margin: 0 0 16px; }
+.eia-submission-search {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.eia-submission-search .eia-search-box {
+  flex: 1 1 420px;
+  height: 48px;
+  background: #fff;
+}
+.eia-submission-search .eia-search-box input { font-size: 14px !important; }
+.eia-submission-search select {
+  flex: 0 0 auto;
+  min-width: 210px;
+  min-height: 48px;
+  font-weight: 600;
+}
+.eia-submission-filter-meta { margin: 8px 0 12px; font-size: 11px; }
+
+.eia-submission-layout { grid-template-columns: 380px minmax(0, 1fr); }
+.eia-submission-row {
+  border-bottom: 1px solid #edf1f5;
+  background: #fff;
+}
+.eia-submission-row:last-child { border-bottom: 0; }
+.eia-submission-row button { border-bottom: 0 !important; }
+.eia-submission-row.selected { background: #eef5fb; }
+.eia-submission-row.selected button {
+  background: #eef5fb !important;
+  box-shadow: inset 3px 0 0 var(--eia-blue);
+}
+.eia-submission-row-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.eia-submission-row-party {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 14px 11px;
+  font-size: 11px;
+  min-width: 0;
+}
+.eia-submission-row.selected .eia-submission-row-party { background: #eef5fb; }
+.eia-submission-row-party a {
+  color: var(--eia-blue);
+  font-weight: 600;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eia-submission-row-party a:hover { text-decoration: underline; }
+
+.eia-submission-load-error { margin: 0 0 12px; }
+.eia-submission-load-error p { margin: 0 0 10px; font-size: 12px; }
+.eia-submission-received { font-size: 13px !important; }
+.eia-submission-torts { display: flex; flex-wrap: wrap; gap: 5px; }
+.eia-submission-notes { white-space: pre-wrap; line-height: 1.5; }
+.eia-submission-action-lede { margin: 6px 0 0; font-size: 11px; line-height: 1.5; }
+.eia-submission-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+.eia-submission-terminal {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #dce7f0;
+  border-radius: 6px;
+  background: #f7fafc;
+  color: var(--eia-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.eia-submission-terminal b { color: var(--eia-ink); }
+.eia-submission-no-policy {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--eia-blue);
+  background: #f4f9fd;
+  color: #36556f;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.eia-submission-modal { width: min(760px, 100%); }
+.eia-submission-modal .eia-context-panel { margin-top: 16px; }
+.eia-submission-status-modal { width: min(560px, 100%); }
+.eia-submission-status-modal .eia-field { margin-top: 14px; }
+.eia-submission-status-modal .eia-modal-actions { margin-top: 14px; }
+.eia-submission-status-modal .eia-submission-no-policy { margin-top: 16px; }
+
+@media (max-width: 1100px) {
+  .eia-submission-layout { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .eia-submission-search select { width: 100%; }
+  .eia-submission-row-party { white-space: normal; }
+}
+

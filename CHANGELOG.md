@@ -209,6 +209,40 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   preview, the `sourceType`/`sourceId` query and tenant header, per-record
   reload, the notification record link, the empty state, and a contained read
   failure.
+- Top-level **Submissions** workspace tab for new-business submissions that
+  precede a policy: a prominent text search over number, applicant, product,
+  tort, status, and notes, a status filter, a clear action, and a queue showing
+  the submission number, product/requested date, status, requested limit, and
+  the applicant as a `/party?record=<id>` cross-link.
+- `New submission` modal with the Party predictive picker, product code,
+  requested effective date, requested limit and currency, comma-separated tort
+  codes, and notes. `POST /api/v1/policies/submissions` sends
+  `{applicantPartyId, productCode, requestedEffectiveDate,
+  requestedLimitAmount, requestedLimitCurrency, tortCodes[], notes?}` with an
+  `Idempotency-Key`; success refreshes and selects the created submission and
+  states that no policy was created. The projection is the Policy expert shape
+  (`submissionId`, `requestedLimitAmount`, `requestedLimitCurrency`); no
+  `productId`, `programId`, `requestedLimits`, exposures, or owner members are
+  read or sent.
+- Submission detail from
+  `GET /api/v1/policies/submissions/{submissionId}` with every request field,
+  status, torts, notes, received/updated timestamps, applicant link, and a
+  detail **Refresh** that re-reads the submission and queue.
+- Allowed status actions only for the current status
+  (`RECEIVED`/`CLEARANCE`/`RATING`/`REFERRED`/`QUOTED`; `BOUND`, `DECLINED`, and
+  `WITHDRAWN` terminal) with an optional reason. The action `PATCH`es
+  `/api/v1/policies/submissions/{submissionId}/status` with `{status, reason?}`;
+  a blank reason is omitted. A 400/409 stays in the dialog, a 409 re-reads the
+  submission, and success refreshes both the detail and the queue.
+- Context copy and success notices state that submissions precede policies and
+  that quoting or binding a submission does not create a policy yet; the
+  submission workbench never creates, amends, quotes, or binds a policy.
+- Playwright coverage for the tab and context, queue and applicant links,
+  text/status filtering and its empty state, detail fields and allowed actions,
+  refresh, create validation with the predictive Party picker and idempotent
+  POST payload, the no-policy explanation, status moves with and without a
+  reason, list retry, contained 422 create rejection, and contained 400/409
+  status problems.
 
 ### Changed
 

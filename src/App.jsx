@@ -3,6 +3,10 @@ import ActivityTimeline, { activityEndpoint, sortActivityItems } from './Activit
 import EntityPicker from './EntityPicker.jsx';
 import LegalEntityPicker from './LegalEntityPicker.jsx';
 import ProgramPicker from './ProgramPicker.jsx';
+import SubmissionsWorkspace from './SubmissionsWorkspace.jsx';
+import CrossLink from './navigation.jsx';
+import { TENANT, api, newIdempotencyKey, pageItems, problemMessage, readJson } from './api.js';
+import { formatMoney } from './format.js';
 import {
   BILLING_FREQUENCIES,
   billingAdjustmentEndpoint,
@@ -177,7 +181,6 @@ import {
   reinstatementCreditNoteGuard
 } from './reinstatement.js';
 
-const TENANT = '11111111-1111-7111-8111-111111111111';
 const PAGE_SIZE = 20;
 const RELATED_LIMIT = 5;
 const QUEUE_FILTER_PLACEHOLDER = 'Filter policies by number, product, or status…';
@@ -228,17 +231,6 @@ function initialForm() {
     limitAmount: '2000000.00',
     limitCurrency: 'USD'
   };
-}
-
-function formatMoney(amount, currency) {
-  if (amount === null || amount === undefined || amount === '') return '—';
-  const value = Number(amount);
-  if (!Number.isFinite(value) || !currency) return String(amount);
-  try {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(value);
-  } catch {
-    return `${amount} ${currency}`;
-  }
 }
 
 function formatPercent(value) {
@@ -292,58 +284,6 @@ function documentStatusTone(status) {
   return 'blue';
 }
 
-function readJson(response) {
-  return response.json().catch(() => null);
-}
-
-function problemMessage(body, fallback) {
-  if (!body) return fallback;
-  const summary = body.detail || body.title || body.message || fallback;
-  const errors = Array.isArray(body.errors) ? body.errors : Array.isArray(body.details) ? body.details : [];
-  if (errors.length === 0) return summary;
-  const details = errors
-    .map((error) => `${error.field || 'request'}: ${error.message || error.code || 'is invalid'}`)
-    .join('; ');
-  return `${summary} (${details})`;
-}
-
-function newIdempotencyKey() {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `policy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-/**
- * The shell owns SPA routing. Pushing history and re-broadcasting popstate keeps
- * cross-vertical links inside the shell; a hard navigation is the last resort.
- */
-function navigateTo(path) {
-  try {
-    window.history.pushState({}, '', path);
-    window.dispatchEvent(new PopStateEvent('popstate'));
-  } catch (e) {
-    window.location.assign(path);
-  }
-}
-
-function CrossLink({ href, className, title, children, ...rest }) {
-  return (
-    <a
-      href={href}
-      className={className}
-      title={title}
-      {...rest}
-      onClick={(event) => {
-        event.preventDefault();
-        navigateTo(href);
-      }}
-    >
-      {children}
-    </a>
-  );
-}
-
 function searchHref(item, basePath) {
   const href = item?.href;
   if (typeof href === 'string' && href.startsWith('/')) return href;
@@ -361,31 +301,6 @@ function readPolicyUrl() {
     record: (params.get('record') || '').trim(),
     create: params.get('new') === '1'
   };
-}
-
-async function api(path, options = {}) {
-  const headers = { 'X-EIA-Tenant': TENANT };
-  if (options.body !== undefined) headers['Content-Type'] = 'application/json';
-  if (options.etag) headers['If-Match'] = options.etag;
-  if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
-  if (options.book) headers['X-EIA-Book'] = options.book;
-  const response = await fetch(path, {
-    method: options.method || 'GET',
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body)
-  });
-  const body = await readJson(response);
-  return {
-    response,
-    body,
-    etag: response.headers.get('ETag'),
-    replayed: response.headers.get('Idempotent-Replayed') === 'true'
-  };
-}
-
-function pageItems(body) {
-  if (Array.isArray(body)) return body;
-  return Array.isArray(body?.items) ? body.items : [];
 }
 
 export default function App() {
@@ -412,6 +327,7 @@ export default function App() {
   const [activity, setActivity] = useState({ items: [], loading: false, error: '' });
   const activityRequestRef = useRef(0);
 
+  const [workspaceTab, setWorkspaceTab] = useState('policies');
   const [selected, setSelected] = useState(null);
   const [tab, setTab] = useState('overview');
   const [tabLoading, setTabLoading] = useState(false);
@@ -3116,6 +3032,45 @@ export default function App() {
 
   return (
     <main>
+      <nav className="eia-tabs eia-workspace-tabs" role="tablist" aria-label="Policy workspace">
+        <button
+          type="button"
+          role="tab"
+          id="workspace-tab-policies"
+          className={`eia-tab${workspaceTab === 'policies' ? ' active' : ''}`}
+          aria-selected={workspaceTab === 'policies'}
+          aria-controls="workspace-panel-policies"
+          onClick={() => {
+            setWorkspaceTab('policies');
+            setError('');
+            setNotice('');
+          }}
+        >
+          Policies
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="workspace-tab-submissions"
+          className={`eia-tab${workspaceTab === 'submissions' ? ' active' : ''}`}
+          aria-selected={workspaceTab === 'submissions'}
+          aria-controls="workspace-panel-submissions"
+          onClick={() => {
+            setWorkspaceTab('submissions');
+            setError('');
+            setNotice('');
+          }}
+        >
+          Submissions
+        </button>
+      </nav>
+
+      {workspaceTab === 'policies' && (
+        <div
+          role="tabpanel"
+          id="workspace-panel-policies"
+          aria-labelledby="workspace-tab-policies"
+        >
       <header className="eia-page-head">
         <div>
           <div className="eyebrow">Policy · Direct book</div>
@@ -7088,6 +7043,18 @@ export default function App() {
           onClose={closeCreditNoteReverse}
           onReverse={reverseCreditNote}
         />
+      )}
+        </div>
+      )}
+
+      {workspaceTab === 'submissions' && (
+        <div
+          role="tabpanel"
+          id="workspace-panel-submissions"
+          aria-labelledby="workspace-tab-submissions"
+        >
+          <SubmissionsWorkspace />
+        </div>
       )}
     </main>
   );

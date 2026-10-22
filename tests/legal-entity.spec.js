@@ -233,7 +233,7 @@ test('places the Legal entity tab after Program and shows the no-entity state', 
   await installMocks(page);
   await openLegalEntityTab(page);
 
-  const tabs = page.getByRole('tab');
+  const tabs = page.getByRole('tablist', { name: 'Policy sections' }).getByRole('tab');
   await expect(tabs.nth(1)).toHaveText('Program');
   await expect(tabs.nth(2)).toHaveText('Legal entity');
 

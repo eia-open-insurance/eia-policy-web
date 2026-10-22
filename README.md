@@ -24,6 +24,39 @@ links, sends an `Idempotency-Key` on every create, and displays canonical
 send it as `If-Match` together with the compatibility `expectedVersion`; a stale
 version is shown as a problem alert and the list is reloaded.
 
+The page has two workspace tabs. **Policies** is the direct policy register and
+record described below. **Submissions** is the new-business queue, which exists
+before a policy record does:
+
+- A prominent search over number, applicant, product, tort, status, and notes
+  plus a status filter narrow the queue, with a match count and a clear action.
+- `New submission` records the applicant party through a predictive Party
+  lookup, product code, requested effective date, requested limit and currency,
+  comma-separated tort codes, and notes. Creating posts
+  `{applicantPartyId, productCode, requestedEffectiveDate, requestedLimitAmount,
+  requestedLimitCurrency, tortCodes, notes?}` to
+  `POST /api/v1/policies/submissions` with an `Idempotency-Key`; success closes
+  the modal, refreshes the queue, selects the new submission, and states that no
+  policy was created. The queue and detail read the Policy expert projection:
+  `submissionId`, `submissionNumber`, `applicantPartyId`, `productCode`,
+  `requestedEffectiveDate`, `requestedLimitAmount`, `requestedLimitCurrency`,
+  `tortCodes`, `notes`, `status`, `version`, and timestamps.
+- The queue lists the submission number, product and requested date, status,
+  requested limit, and the applicant as a `/party?record=<id>` cross-link.
+  Selecting a row reads `GET /api/v1/policies/submissions/{submissionId}`.
+- The detail panel shows the request fields, status, torts, notes, received
+  date, and only the status actions allowed from the current status. Each action
+  asks for an optional reason and `PATCH`es
+  `/api/v1/policies/submissions/{submissionId}/status` with
+  `{status, reason?}`. A detail **Refresh** action re-reads the record and the
+  queue. A 400 or 409 stays in the dialog; a 409 also re-reads the current
+  submission.
+- Submission statuses are `RECEIVED`, `CLEARANCE`, `RATING`, `REFERRED`,
+  `QUOTED`, `BOUND`, `DECLINED`, and `WITHDRAWN`. The tab explains that
+  submissions precede policies and that quoting or binding a submission does
+  not create a policy yet; the policy is created separately after conversion.
+  A submission never creates, amends, quotes, or binds a policy in this remote.
+
 Opening a policy shows a record detail with tabs:
 
 - **Overview** — policy terms, ETag, the derived current version with its
@@ -179,7 +212,7 @@ npm run build
 npm test
 ```
 
-`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/legal-entity.spec.js` covers the Legal entity tab position and empty state, attaching a catalog entity and rendering its issuing details, the detach payload, creating an entity with all catalog fields and attaching it, create validation/rejection inside the open dialog, a missing assigned entity, a contained entity read failure with retry, and a 409 attach conflict with reload and retry. `tests/program.spec.js` covers the Program tab position and empty state, attaching a catalog program with the lead-policy link, the detach payload, capacity/used/utilization/policy-count values, the over-capacity red state, the capacity amount/currency create payload, create defaults with the current policy as lead, creating without a lead policy, create validation/rejection, attach rejection and retry, and a contained program read failure with retry. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/mass-tort.spec.js` covers the profile empty state, draft save, complete validation, existing-value load and edit, context boundary, read failure, 400 problem, and 409 reload, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, linking an existing policy payment (fetch, selection/apply payload, amount warning, empty, read failure, and 409), the premium-vs-net-plan variance warning (credits reducing or eliminating the difference, and fully or over-credited plans floored at zero), the positive-variance adjustment modal and `{dueDate, reason}` payload with plan/policy reload, contained 422 and 409 guidance, the negative-variance credit-note prefill and POST, the zero-variance no-action state, the Payment hand-off URL, and 409 conflicts, and `tests/renewal.spec.js` covers the action's status eligibility, modal term/premium defaults, renewal payload and headers, success selection/notice, the predecessor link, and the 409 conflict, `tests/rating.spec.js` covers the latest worksheet/hash card, the live premium preview, calculation-only and applied POST payloads with `If-Match`, the refreshed premium/ETag/version history, DRAFT/QUOTED eligibility with the disabled reason, FLAT's omitted exposure, and 400/409 containment, `tests/premium-audit.spec.js` covers the audit action's status eligibility, the increase/decrease/no-change delta previews, POST payload/headers, the refreshed policy and PREMIUM_AUDIT version, and 400/409 containment, `tests/cancellation-credit-note.spec.js` covers the cancellation
+`npm test` runs the Playwright tests against the dev server with a mocked API, covering the page envelope, pagination links, problem bodies, and ETag/If-Match. `tests/submissions.spec.js` covers the Submissions tab context and queue, applicant party links, text and status filtering, detail fields and allowed actions, refresh, create validation with the predictive Party picker and `{applicantPartyId, productCode, requestedEffectiveDate, requestedLimitAmount, requestedLimitCurrency, tortCodes, notes?}` payload plus `Idempotency-Key`, the explicit no-policy explanation, status moves with an optional reason and without it, list retry, and contained 422 create and 400/409 status problems. `tests/legal-entity.spec.js` covers the Legal entity tab position and empty state, attaching a catalog entity and rendering its issuing details, the detach payload, creating an entity with all catalog fields and attaching it, create validation/rejection inside the open dialog, a missing assigned entity, a contained entity read failure with retry, and a 409 attach conflict with reload and retry. `tests/program.spec.js` covers the Program tab position and empty state, attaching a catalog program with the lead-policy link, the detach payload, capacity/used/utilization/policy-count values, the over-capacity red state, the capacity amount/currency create payload, create defaults with the current policy as lead, creating without a lead policy, create validation/rejection, attach rejection and retry, and a contained program read failure with retry. `tests/coverage.spec.js` covers the coverage/limit add and erosion flow, `tests/mass-tort.spec.js` covers the profile empty state, draft save, complete validation, existing-value load and edit, context boundary, read failure, 400 problem, and 409 reload, `tests/endorsement.spec.js` covers the endorsement flow and the 428 approval problem, `tests/activity.spec.js` covers the event-timeline path/header, ordering, empty and unavailable states, and payload facts, `tests/billing.spec.js` covers plan creation, the billing summary, mark paid/waive PATCH payloads, overdue rows, linking an existing policy payment (fetch, selection/apply payload, amount warning, empty, read failure, and 409), the premium-vs-net-plan variance warning (credits reducing or eliminating the difference, and fully or over-credited plans floored at zero), the positive-variance adjustment modal and `{dueDate, reason}` payload with plan/policy reload, contained 422 and 409 guidance, the negative-variance credit-note prefill and POST, the zero-variance no-action state, the Payment hand-off URL, and 409 conflicts, and `tests/renewal.spec.js` covers the action's status eligibility, modal term/premium defaults, renewal payload and headers, success selection/notice, the predecessor link, and the 409 conflict, `tests/rating.spec.js` covers the latest worksheet/hash card, the live premium preview, calculation-only and applied POST payloads with `If-Match`, the refreshed premium/ETag/version history, DRAFT/QUOTED eligibility with the disabled reason, FLAT's omitted exposure, and 400/409 containment, `tests/premium-audit.spec.js` covers the audit action's status eligibility, the increase/decrease/no-change delta previews, POST payload/headers, the refreshed policy and PREMIUM_AUDIT version, and 400/409 containment, `tests/cancellation-credit-note.spec.js` covers the cancellation
 return-premium prefill, locked amount/currency/reason, `cancellationId` payload,
 the created-note link and ledger source cancellation number, and 409/500
 containment. `@swc/core` is pinned to `1.10.7`.

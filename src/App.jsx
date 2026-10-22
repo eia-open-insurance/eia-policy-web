@@ -5323,7 +5323,7 @@ export default function App() {
                             data-testid="reinstatement-error-code"
                           >
                             {reinstateError.code}
-                          </code>
+                          </code>{' '}
                           <span data-testid="reinstatement-error-detail">
                             {reinstateError.detail}
                           </span>

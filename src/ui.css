@@ -1251,6 +1251,48 @@ a.eia-btn-secondary.eia-billing-payment-link {
   .eia-premium-audit-action button { width: 100%; }
 }
 
+/* Policy rating: a reproducible worksheet, applied only on explicit opt-in. */
+.eia-rating-worksheet { border-left: 3px solid var(--eia-blue); }
+.eia-rating-hash {
+  display: inline-block;
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+.eia-rating-preview {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid #dce7f0;
+  border-radius: 6px;
+  background: #f7fafc;
+  color: var(--eia-navy);
+  font-size: 17px;
+  font-weight: 700;
+}
+.eia-rating-apply {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--eia-ink);
+}
+.eia-rating-apply input[type="checkbox"] {
+  width: 16px !important;
+  height: 16px !important;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 !important;
+  accent-color: var(--eia-blue);
+  cursor: pointer;
+}
+.eia-rating-apply input[type="checkbox"]:disabled { cursor: not-allowed; }
+
 .eia-modal-backdrop {
   position: fixed;
   inset: 0;

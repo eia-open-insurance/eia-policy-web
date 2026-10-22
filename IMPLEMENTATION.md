@@ -62,6 +62,29 @@ and keeps the canonical problem in the tab. The context panel states that the
 legal entity is the issuing, licensed carrier and that assigning one does not
 change coverage or limits.
 
+The Rating tab sits after Coverage & Limits. The latest worksheet is read with
+`GET /api/v1/policies/{policyId}/rating` lazily on tab selection; a 404 is
+the no-worksheet empty state, not an error. The latest-worksheet card shows the
+method, base rate, exposure, factor, computed premium, canonical `calcHash`, and
+created timestamp, and a read failure stays inside the card with Retry. The
+calculator supports `RATE_TIMES_EXPOSURE` (`baseRate × exposureAmount × factor`)
+and `FLAT` (`baseRate × factor`, no exposure stored); the preview normalizes the
+operands to the expert's scales and rounds the premium once to four decimals, so
+it matches the posted calculation. Rating posts to
+`POST /api/v1/policies/{policyId}/rating` with `{ratingMethod, baseRate,
+exposureAmount, factor, apply}` and a fresh `Idempotency-Key`; a calculation
+only post omits `If-Match` and leaves the policy untouched, while `Apply to
+quote` sends the selected ETag as `If-Match`. Applying refreshes the policy
+premium and ETag, the current version, and the Versions tab, and the notice
+reports the old and new premium, the advanced version/ETag, and the worksheet
+hash prefix. A 400 validation problem or a 409 not-rateable/stale-version
+conflict stays in the tab with the canonical problem and field errors. Only
+`DRAFT` and `QUOTED` policies are rateable; every other status disables the
+controls and shows the reason. The context panel states that a worksheet is
+reproducible from its normalized inputs and SHA-256 hash, that rating does not
+change coverage or limits, and that issued premium changes use Premium audit on
+the Endorsements tab.
+
 The Mass tort tab sits after Coverage & Limits and administers the policy-owned
 mass tort profile. `GET /mass-tort-profile` is read lazily on tab selection; a
 404 is the not-set empty state, not an error. `Set up profile` reveals the form
@@ -338,7 +361,12 @@ page-level handling of a non-credit-note rejection;
 `tests/renewal.spec.js` covers action eligibility by status,
 modal term and premium/limit defaults, the renewal payload and headers, success
 selection and notice, the predecessor link and its navigation, and the 409
-conflict; `tests/mass-tort.spec.js` covers the not-set empty state and setup
+conflict; `tests/rating.spec.js` covers the latest worksheet fields and full
+hash, the live premium preview, a calculation-only POST without `If-Match` that
+leaves the premium/ETag/version reads untouched, an applied POST with `If-Match`
+that refreshes the premium, ETag, current version, and version list, the FLAT
+method with a null exposure, DRAFT/QUOTED eligibility with the disabled reason,
+and contained 400/409 problems; `tests/mass-tort.spec.js` covers the not-set empty state and setup
 form, the draft payload and header, complete validation (including a reversed
 coverage block), existing-value load and edit, the allocation/ownership context,
 a contained read failure with retry, a 400 problem inside the form, and the 409

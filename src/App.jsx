@@ -146,6 +146,25 @@ import {
   validatePremiumAuditForm
 } from './premiumAudit.js';
 import {
+  RATING_METHODS,
+  defaultRatingForm,
+  emptyRatingState,
+  formatRatingFactor,
+  formatRatingRate,
+  formatRatingTimestamp,
+  isRateable,
+  normalizeRatingResult,
+  normalizeRatingWorksheet,
+  ratingMethodDescription,
+  ratingMethodLabel,
+  ratingPayload,
+  ratingPreview,
+  ratingUnavailableReason,
+  ratingUsesExposure,
+  shortRatingHash,
+  validateRatingForm
+} from './rating.js';
+import {
   addYears,
   defaultRenewalForm,
   isRenewable,
@@ -178,6 +197,7 @@ const TABS = [
   { id: 'legalEntity', label: 'Legal entity' },
   { id: 'versions', label: 'Versions' },
   { id: 'coverages', label: 'Coverages & Limits' },
+  { id: 'rating', label: 'Rating' },
   { id: 'massTort', label: 'Mass tort' },
   { id: 'endorsements', label: 'Endorsements' },
   { id: 'parties', label: 'Insureds & Locations' },
@@ -461,6 +481,13 @@ export default function App() {
   const [premiumAuditForm, setPremiumAuditForm] = useState(() => defaultPremiumAuditForm(null));
   const [premiumAuditBusy, setPremiumAuditBusy] = useState(false);
   const [premiumAuditError, setPremiumAuditError] = useState('');
+
+  const [rating, setRating] = useState(emptyRatingState);
+  const ratingRequestRef = useRef(0);
+  const [ratingForm, setRatingForm] = useState(defaultRatingForm);
+  const [ratingBusy, setRatingBusy] = useState(false);
+  const [ratingFormError, setRatingFormError] = useState('');
+
   const [insuredForm, setInsuredForm] = useState(() => defaultInsuredForm(null));
   const [locationForm, setLocationForm] = useState(() => defaultLocationForm(null));
   const [cancelForm, setCancelForm] = useState(defaultCancelForm);
@@ -684,6 +711,7 @@ export default function App() {
       clearCreditNotes();
       clearMassTort();
       setMassTortForm(defaultMassTortForm(null, detail.body));
+      clearRating();
       setPremiumAuditOpen(false);
       setPremiumAuditForm(defaultPremiumAuditForm(detail.body));
       setPremiumAuditError('');
@@ -1118,6 +1146,63 @@ export default function App() {
   }
 
   /**
+   * A rating worksheet is an immutable calculation record. GET returns the
+   * newest one for the policy; a 404 means the policy has never been rated and
+   * is the tab's empty state, not an unavailable tab. The read keeps its own
+   * request lifecycle so a slow worksheet never blocks the policy header.
+   */
+  async function loadRating(policyId = selected?.id) {
+    const requestId = ratingRequestRef.current + 1;
+    ratingRequestRef.current = requestId;
+    if (!policyId) {
+      setRating(emptyRatingState());
+      return;
+    }
+    setRating((current) => ({ ...current, loading: true, error: '' }));
+    try {
+      const result = await api(`/api/v1/policies/${policyId}/rating`);
+      if (ratingRequestRef.current !== requestId) return;
+      if (result.response.status === 204 || result.response.status === 404) {
+        setRating({ ...emptyRatingState(), loading: false });
+        return;
+      }
+      if (!result.response.ok) {
+        setRating((current) => ({
+          worksheet: current.worksheet,
+          loading: false,
+          error: 'Rating worksheet is temporarily unavailable.'
+        }));
+        return;
+      }
+      const worksheet = normalizeRatingWorksheet(result.body);
+      if (!worksheet) {
+        setRating((current) => ({
+          worksheet: current.worksheet,
+          loading: false,
+          error: 'The latest rating worksheet could not be read.'
+        }));
+        return;
+      }
+      setRating({ worksheet, loading: false, error: '' });
+    } catch {
+      if (ratingRequestRef.current !== requestId) return;
+      setRating((current) => ({
+        worksheet: current.worksheet,
+        loading: false,
+        error: 'Rating worksheet is temporarily unavailable.'
+      }));
+    }
+  }
+
+  function clearRating() {
+    ratingRequestRef.current += 1;
+    setRating(emptyRatingState());
+    setRatingForm(defaultRatingForm());
+    setRatingBusy(false);
+    setRatingFormError('');
+  }
+
+  /**
    * A policy belongs to at most one program. The tab reads the policy's current
    * assignment, then the program catalog record, so a policy with no program is
    * the tab's empty state rather than an unavailable tab. A missing policy
@@ -1379,6 +1464,8 @@ export default function App() {
         const result = await api(`/api/v1/policies/${policyId}/coverages?page=0&size=50`);
         if (!result.response.ok) setError(problemMessage(result.body, 'Coverage load failed'));
         else setCoverages(pageItems(result.body));
+      } else if (tabId === 'rating') {
+        await loadRating(policyId);
       } else if (tabId === 'massTort') {
         await loadMassTort(policyId, selected?.id === policyId ? selected.policy : null);
       } else if (tabId === 'endorsements') {
@@ -1478,6 +1565,7 @@ export default function App() {
     setLinkedPayments({});
     clearCreditNotes();
     clearMassTort();
+    clearRating();
     clearProgram();
     clearLegalEntity();
   }
@@ -1902,6 +1990,93 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [premiumAuditOpen, premiumAuditBusy]);
+
+  // ---- rating -------------------------------------------------------
+  function updateRating(field, value) {
+    setRatingForm((current) => ({ ...current, [field]: value }));
+    setRatingFormError('');
+  }
+
+  /**
+   * A rating always persists one immutable worksheet. Applying it is the only
+   * branch that changes the policy premium, and it uses the current ETag so a
+   * concurrent edit wins. The command response is not the authoritative read
+   * model, so an applied rating re-reads the policy, its ETag, and its version
+   * history; a calculation-only rating leaves the policy untouched.
+   */
+  async function submitRating(event) {
+    event.preventDefault();
+    if (!selected || !selectedPolicy || !isRateable(selectedPolicy.status)) return;
+    setError('');
+    setNotice('');
+    setRatingFormError('');
+    const validation = validateRatingForm(ratingForm);
+    if (validation) {
+      setRatingFormError(validation);
+      return;
+    }
+    const payload = ratingPayload(ratingForm);
+    const preview = ratingPreview(ratingForm);
+    const beforePremium = selectedPolicy.premiumAmount;
+    setRatingBusy(true);
+    try {
+      const result = await api(`/api/v1/policies/${selected.id}/rating`, {
+        method: 'POST',
+        body: payload,
+        etag: payload.apply ? selected.etag : undefined,
+        idempotencyKey: newIdempotencyKey()
+      });
+      if (!result.response.ok) {
+        // 400 validation and 409 not-rateable/stale-version problems stay in
+        // the tab; the operator's rating inputs survive the failure.
+        setRatingFormError(problemMessage(result.body, `Rating failed: ${result.response.status}`));
+        return;
+      }
+
+      const normalized = normalizeRatingResult(result.body);
+      if (normalized.worksheet) {
+        setRating({ worksheet: normalized.worksheet, loading: false, error: '' });
+      } else {
+        await loadRating(selected.id);
+      }
+
+      const currency = normalized.worksheet?.currency
+        || normalized.policy?.premiumCurrency
+        || selectedPolicy.premiumCurrency
+        || '';
+      const afterPremium = normalized.worksheet?.computedPremium
+        || normalized.policy?.premiumAmount
+        || (preview.premium === null ? '' : String(preview.premium));
+      const hash = normalized.worksheet?.calcHash || '';
+      const replayPrefix = result.replayed ? 'Idempotent replay: ' : '';
+      setRatingForm((current) => ({ ...current, apply: false }));
+
+      if (payload.apply) {
+        const version = normalized.policy?.version;
+        const etag = result.etag || (version === undefined ? '' : `"${version}"`);
+        setNotice([
+          `${replayPrefix}Rating applied: ${formatMoney(beforePremium, currency)} → `
+            + `${formatMoney(afterPremium, currency)}.`,
+          version === undefined ? '' : `Policy version ${version}.`,
+          etag ? `ETag ${etag}.` : '',
+          hash ? `Worksheet ${shortRatingHash(hash)} recorded.` : ''
+        ].filter(Boolean).join(' '));
+        await refreshSelected(result.etag);
+        await loadCurrentVersion(selected.id);
+        await loadTabData('versions');
+      } else {
+        setNotice(
+          `${replayPrefix}Rating worksheet calculated: `
+          + `${formatMoney(afterPremium, currency)}. The policy premium is unchanged until the `
+          + 'rating is applied.'
+        );
+      }
+    } catch (e) {
+      setRatingFormError(e.message);
+    } finally {
+      setRatingBusy(false);
+    }
+  }
 
   // ---- billing plan -------------------------------------------------
   function updateBilling(field, value) {
@@ -2801,6 +2976,15 @@ export default function App() {
     : premiumAuditChange === 'DECREASE'
       ? 'decrease'
       : premiumAuditChange === 'NO_CHANGE' ? 'flat' : 'unknown';
+  const ratingAllowed = selectedPolicy ? isRateable(selectedPolicy.status) : false;
+  const ratingHint = selectedPolicy ? ratingUnavailableReason(selectedPolicy.status) : '';
+  const ratingCurrency = selectedPolicy?.premiumCurrency || '';
+  const ratingPreviewValue = ratingPreview(ratingForm);
+  const ratingPreviewText = ratingPreviewValue.premium === null
+    ? 'Enter the rating inputs to preview the computed premium.'
+    : formatMoney(ratingPreviewValue.premium, ratingCurrency);
+  const ratingExposureUsed = ratingUsesExposure(ratingForm.ratingMethod);
+  const ratingLatestWorksheet = rating.worksheet;
   const renewedFromPolicyId = selectedPolicy?.renewedFromPolicyId || '';
   const renewedFromLabel = renewedFromPolicyId
     ? ((renewedFrom?.id === renewedFromPolicyId && renewedFrom.policyNumber)
@@ -3314,7 +3498,7 @@ export default function App() {
                 ))}
               </nav>
 
-              {tabLoading && tab !== 'billing' && tab !== 'massTort' && tab !== 'program' && tab !== 'legalEntity' && (
+              {tabLoading && tab !== 'billing' && tab !== 'massTort' && tab !== 'program' && tab !== 'legalEntity' && tab !== 'rating' && (
                 <p className="eia-muted">Loading…</p>
               )}
 
@@ -4458,6 +4642,315 @@ export default function App() {
                       </div>
                     </form>
                   </section>
+                </section>
+              )}
+
+              {tab === 'rating' && (
+                <section
+                  id="panel-rating"
+                  role="tabpanel"
+                  aria-labelledby="tab-rating"
+                >
+                  <div className="eia-section-title">
+                    <h2>Rating worksheet</h2>
+                    <span className="eia-muted">
+                      Reproducible premium calculation · applying moves the written premium
+                    </span>
+                  </div>
+
+                  {rating.loading && !ratingLatestWorksheet ? (
+                    <p className="eia-muted" role="status" data-testid="rating-loading">
+                      Loading latest rating worksheet…
+                    </p>
+                  ) : rating.error && !ratingLatestWorksheet ? (
+                    <section
+                      className="eia-card"
+                      aria-label="Rating worksheet unavailable"
+                      data-testid="rating-error"
+                    >
+                      <p role="alert" style={{ marginTop: 0 }}>{rating.error}</p>
+                      <button
+                        type="button"
+                        className="eia-btn-secondary"
+                        onClick={() => loadRating()}
+                      >
+                        Retry
+                      </button>
+                    </section>
+                  ) : !ratingLatestWorksheet ? (
+                    <section
+                      className="eia-card eia-empty"
+                      aria-label="No rating worksheet"
+                      data-testid="rating-empty"
+                    >
+                      <h3>No rating worksheet yet</h3>
+                      <p className="eia-billing-copy">
+                        Calculate a rating to record the method, base rate, exposure, factor,
+                        computed premium, and reproducible SHA-256 hash. The policy premium does
+                        not move until the rating is applied.
+                      </p>
+                    </section>
+                  ) : (
+                    <section
+                      className="eia-card eia-rating-worksheet"
+                      aria-label="Latest rating worksheet"
+                      data-testid="rating-worksheet"
+                    >
+                      <div className="eia-section-title" style={{ marginTop: 0 }}>
+                        <h2>Latest rating worksheet</h2>
+                        <span
+                          className="eia-pill green"
+                          data-testid="rating-status"
+                        >
+                          {ratingLatestWorksheet.status || 'CALCULATED'}
+                        </span>
+                      </div>
+                      <p className="eia-billing-copy">
+                        This immutable worksheet records the normalized inputs. Re-running the
+                        same method and operands reproduces the same premium and hash.
+                      </p>
+                      <dl className="eia-kv" style={{ marginTop: 10 }}>
+                        <dt>Method</dt>
+                        <dd data-testid="rating-value-method">
+                          {ratingMethodLabel(ratingLatestWorksheet.ratingMethod)}
+                          {' '}
+                          <code className="eia-mono">
+                            {ratingLatestWorksheet.ratingMethod || '—'}
+                          </code>
+                        </dd>
+                        <dt>Base rate</dt>
+                        <dd data-testid="rating-value-base-rate">
+                          {formatRatingRate(
+                            ratingLatestWorksheet.baseRate,
+                            ratingLatestWorksheet.currency
+                          )}
+                        </dd>
+                        <dt>Exposure</dt>
+                        <dd data-testid="rating-value-exposure">
+                          {ratingLatestWorksheet.exposureAmount
+                            ? formatMoney(
+                              ratingLatestWorksheet.exposureAmount,
+                              ratingLatestWorksheet.currency
+                            )
+                            : '—'}
+                        </dd>
+                        <dt>Factor</dt>
+                        <dd data-testid="rating-value-factor">
+                          {formatRatingFactor(ratingLatestWorksheet.factor)}
+                        </dd>
+                        <dt>Computed premium</dt>
+                        <dd data-testid="rating-value-premium">
+                          {formatMoney(
+                            ratingLatestWorksheet.computedPremium,
+                            ratingLatestWorksheet.currency
+                          )}
+                        </dd>
+                        <dt>Reproducibility hash</dt>
+                        <dd>
+                          <code
+                            className="eia-mono eia-rating-hash"
+                            data-testid="rating-value-hash"
+                          >
+                            {ratingLatestWorksheet.calcHash || '—'}
+                          </code>
+                        </dd>
+                        <dt>Created</dt>
+                        <dd>
+                          <time
+                            dateTime={ratingLatestWorksheet.createdAt || undefined}
+                            data-testid="rating-value-created"
+                          >
+                            {formatRatingTimestamp(ratingLatestWorksheet.createdAt)}
+                          </time>
+                        </dd>
+                      </dl>
+                    </section>
+                  )}
+
+                  {rating.loading && ratingLatestWorksheet && (
+                    <p className="eia-muted" role="status" data-testid="rating-refreshing">
+                      Refreshing latest rating worksheet…
+                    </p>
+                  )}
+
+                  {rating.error && ratingLatestWorksheet && (
+                    <section
+                      className="eia-card"
+                      aria-label="Rating worksheet refresh failed"
+                      data-testid="rating-refresh-error"
+                      style={{ marginTop: 12 }}
+                    >
+                      <p role="alert" style={{ marginTop: 0 }}>{rating.error}</p>
+                      <button
+                        type="button"
+                        className="eia-btn-secondary"
+                        onClick={() => loadRating()}
+                      >
+                        Retry
+                      </button>
+                    </section>
+                  )}
+
+                  <section
+                    className="eia-card"
+                    aria-label="Rating calculator"
+                    data-testid="rating-form"
+                    style={{ marginTop: 16 }}
+                  >
+                    <div className="eia-section-title" style={{ marginTop: 0 }}>
+                      <h2>Calculate a rating</h2>
+                      <span className="eia-muted">
+                        {ratingCurrency || 'Policy currency'} · worksheet now, premium only when applied
+                      </span>
+                    </div>
+                    <p className="eia-billing-copy">
+                      Every submission records an immutable worksheet. The live preview uses the
+                      same normalized operands and four-decimal rounding as the domain. Check
+                      <b> Apply to quote</b> to replace the policy premium and advance its version
+                      and ETag.
+                    </p>
+
+                    {!ratingAllowed && (
+                      <p
+                        className="eia-premium-audit-unavailable"
+                        data-testid="rating-unavailable"
+                        style={{ marginTop: 0 }}
+                      >
+                        {ratingHint}
+                      </p>
+                    )}
+
+                    {ratingFormError && (
+                      <p
+                        role="alert"
+                        className="eia-modal-error"
+                        data-testid="rating-form-error"
+                        style={{ marginTop: 12 }}
+                      >
+                        {ratingFormError}
+                      </p>
+                    )}
+
+                    <form className="eia-form-grid" onSubmit={submitRating}>
+                      <div className="eia-field">
+                        <label htmlFor="rating-method">Rating method</label>
+                        <select
+                          id="rating-method"
+                          value={ratingForm.ratingMethod}
+                          onChange={(e) => updateRating('ratingMethod', e.target.value)}
+                          disabled={!ratingAllowed || ratingBusy}
+                        >
+                          {RATING_METHODS.map((entry) => (
+                            <option key={entry.value} value={entry.value}>
+                              {entry.label} ({entry.value})
+                            </option>
+                          ))}
+                        </select>
+                        <span
+                          className="eia-field-hint"
+                          data-testid="rating-method-help"
+                        >
+                          {ratingMethodDescription(ratingForm.ratingMethod)
+                            || 'Choose how the premium is calculated.'}
+                        </span>
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="rating-base-rate">Base rate</label>
+                        <input
+                          id="rating-base-rate"
+                          type="number"
+                          min="0"
+                          step="0.000001"
+                          value={ratingForm.baseRate}
+                          onChange={(e) => updateRating('baseRate', e.target.value)}
+                          disabled={!ratingAllowed || ratingBusy}
+                        />
+                        <span className="eia-field-hint">
+                          {ratingExposureUsed
+                            ? `Rate per unit of exposure, in ${ratingCurrency || 'the policy currency'}.`
+                            : `Flat premium before the factor, in ${ratingCurrency || 'the policy currency'}.`}
+                        </span>
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="rating-exposure">Exposure amount</label>
+                        <input
+                          id="rating-exposure"
+                          type="number"
+                          min="0"
+                          step="0.0001"
+                          value={ratingForm.exposureAmount}
+                          onChange={(e) => updateRating('exposureAmount', e.target.value)}
+                          disabled={!ratingAllowed || ratingBusy || !ratingExposureUsed}
+                        />
+                        <span className="eia-field-hint">
+                          {ratingExposureUsed
+                            ? 'The rated exposure. It must be greater than zero.'
+                            : 'Not used or stored for a FLAT rating.'}
+                        </span>
+                      </div>
+                      <div className="eia-field">
+                        <label htmlFor="rating-factor">Factor</label>
+                        <input
+                          id="rating-factor"
+                          type="number"
+                          min="0"
+                          step="0.000001"
+                          value={ratingForm.factor}
+                          onChange={(e) => updateRating('factor', e.target.value)}
+                          disabled={!ratingAllowed || ratingBusy}
+                        />
+                        <span className="eia-field-hint">
+                          Multiplier applied after the base rate. Defaults to 1 when blank.
+                        </span>
+                      </div>
+                      <div className="eia-field span-2">
+                        <span className="eia-field-label">Computed premium</span>
+                        <div
+                          className="eia-rating-preview"
+                          data-testid="rating-preview"
+                        >
+                          {ratingPreviewText}
+                        </div>
+                        <span className="eia-field-hint">
+                          {ratingPreviewValue.premium === null
+                            ? 'The preview updates as you enter the base rate and exposure.'
+                            : `${ratingMethodDescription(ratingForm.ratingMethod)} Rounded once to four decimals.`}
+                        </span>
+                      </div>
+                      <div className="eia-field span-3">
+                        <label className="eia-rating-apply" htmlFor="rating-apply">
+                          <input
+                            id="rating-apply"
+                            type="checkbox"
+                            checked={ratingForm.apply}
+                            onChange={(e) => updateRating('apply', e.target.checked)}
+                            disabled={!ratingAllowed || ratingBusy}
+                          />
+                          Apply to quote
+                        </label>
+                        <span className="eia-field-hint">
+                          When checked, the computed premium replaces the policy premium and the
+                          policy version advances. Leave it clear to record a worksheet only.
+                        </span>
+                      </div>
+                      <div
+                        className="eia-actions span-3"
+                        style={{ justifyContent: 'flex-start' }}
+                      >
+                        <button
+                          type="submit"
+                          disabled={!ratingAllowed || ratingBusy}
+                          title={ratingAllowed
+                            ? 'Record a rating worksheet'
+                            : ratingHint}
+                        >
+                          {ratingBusy ? 'Rating…' : 'Rate policy'}
+                        </button>
+                      </div>
+                    </form>
+                  </section>
+
+                  <RatingContextPanel />
                 </section>
               )}
 
@@ -8222,6 +8715,45 @@ function MassTortContextPanel() {
       <div className="links">
         <CrossLink href="/direct-claims">Open Direct Claims workbench</CrossLink>
       </div>
+    </section>
+  );
+}
+
+/**
+ * Rating is a reproducible premium calculation, not a coverage transaction.
+ * These boundaries explain why the same inputs produce the same hash and
+ * where an issued policy's premium corrections belong.
+ */
+function RatingContextPanel() {
+  return (
+    <section
+      className="eia-context-panel"
+      aria-label="Rating context"
+      data-testid="rating-context"
+    >
+      <h4>Rating context</h4>
+      <p>
+        <b>Rating is reproducible.</b> Every worksheet stores the normalized method, base rate,
+        exposure, factor, currency, computed premium, and a canonical SHA-256 hash. Re-running
+        the same calculation reproduces the same premium and hash, and each attempt is retained
+        as its own immutable worksheet instead of overwriting the prior one.
+      </p>
+      <p>
+        <b>A calculation does not change the policy.</b> The worksheet is recorded immediately,
+        but the policy premium only moves when <b>Apply to quote</b> is checked. Applying
+        replaces the written premium and advances the policy version and ETag.
+      </p>
+      <p>
+        <b>Rating does not change coverage or limits.</b> Coverage grants, aggregate and
+        per-occurrence limits, deductibles, insureds, and locations stay exactly as they are;
+        only the written premium can change when a rating is applied.
+      </p>
+      <p>
+        <b>Issued premium changes use premium audit.</b> Only DRAFT and QUOTED policies are
+        rateable. Once a policy is issued, correct its written premium with <b>Premium audit</b>
+        on the Endorsements tab; that workflow issues a PREMIUM_AUDIT version, which rating does
+        not.
+      </p>
     </section>
   );
 }

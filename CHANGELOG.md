@@ -91,6 +91,22 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
 - Playwright coverage for the mass tort empty state, draft payload, complete
   validation, existing-value load/edit, context boundary, read failure, 400
   problem, and 409 reload.
+- Rating tab after Coverage & Limits with the latest immutable worksheet card
+  (method, base rate, exposure, factor, computed premium, canonical SHA-256
+  hash, and created timestamp) and a calculator for `RATE_TIMES_EXPOSURE` or
+  `FLAT` with a live computed-premium preview and `Apply to quote` opt-in.
+- `GET`/`POST /api/v1/policies/{policyId}/rating` integration: a
+  calculation-only post records a worksheet without touching the policy, and
+  an applied post sends `If-Match` plus `Idempotency-Key`, then refreshes the
+  policy premium, ETag, current version, and version history.
+- Rating eligibility limited to `DRAFT` and `QUOTED` policies, with the
+  disabled reason shown for every other status and contained 400/409 problems.
+- Rating context panel stating that a worksheet is reproducible from its
+  normalized inputs and hash, that rating does not change coverage or limits,
+  and that issued premium changes use Premium audit.
+- Playwright coverage for the latest worksheet/hash card, live preview,
+  calculation-only and applied POST payloads, ETag/premium/version refresh,
+  DRAFT/QUOTED eligibility, FLAT exposure omission, and 400/409 containment.
 - Program tab after Overview with a no-program empty state, the current
   program's number, name, type, effective dates, status, and lead-policy link,
   and a `Detach program` action.
